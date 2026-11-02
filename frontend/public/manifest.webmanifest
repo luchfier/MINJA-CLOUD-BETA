@@ -1,0 +1,27 @@
+{
+  "name": "Minja Photobooth Command Portal",
+  "short_name": "Minja Portal",
+  "description": "Owner & Partner Network Management Command Portal — Minja Photobooth Enterprise",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#0B0F19",
+  "theme_color": "#4F46E5",
+  "orientation": "any",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/minja-icon.png",
+      "sizes": "512x512 192x192 128x128 64x64",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/minja-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
+

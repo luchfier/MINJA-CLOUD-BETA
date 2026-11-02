@@ -1,0 +1,22 @@
+{
+  "name": "minja-cloud-platform",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Minja Cloud Platform — Central Fleet Management, Owner, Partner, Operator, and Mobile Web Gallery",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:frontend\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix server run build && npm --prefix frontend run build",
+    "build:server": "npm --prefix server run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "start": "npm --prefix server run start",
+    "db:push": "npm --prefix server run prisma:push",
+    "db:seed": "npm --prefix server run prisma:seed",
+    "db:studio": "npm --prefix server run prisma:studio"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

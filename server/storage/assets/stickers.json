@@ -1,0 +1,128 @@
+[
+  {
+    "id": "stk-heart",
+    "name": "Red Heart",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "❤️",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-sparkles",
+    "name": "Sparkles",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "✨",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-cool",
+    "name": "Cool Sunglasses",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "😎",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-party",
+    "name": "Party Popper",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🎉",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-crown",
+    "name": "Gold Crown",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "👑",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-camera",
+    "name": "Vintage Camera",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "📷",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-butterfly",
+    "name": "Butterfly",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🦋",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-ribbon",
+    "name": "Pink Ribbon",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🎀",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-flame",
+    "name": "Flame Hits",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🔥",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-peace",
+    "name": "Peace Sign",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "✌️",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-flower",
+    "name": "Cherry Blossom",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🌸",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-cake",
+    "name": "Birthday Cake",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🎂",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-star",
+    "name": "Gold Star",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "⭐",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  },
+  {
+    "id": "stk-celebrate",
+    "name": "Partying Face",
+    "category": "Emoji",
+    "type": "emoji",
+    "url": "🥳",
+    "isActive": true,
+    "createdAt": "2026-11-02T14:59:28.032Z"
+  }
+]
