@@ -264,19 +264,58 @@ export class SessionNameEngine {
   }
 
   /**
-   * Memformat kode sesi untuk keperluan tampilan receipt / galeri / kasir
+   * Mengekstrak 4 digit nomor urut sesi murni angka (contoh: '0018', '0001')
+   * Digunakan untuk portal galeri mobile (gallery.minja.my.id), lookup, dan receipt
+   */
+  public formatSessionDigits(sessionId?: string | null): string {
+    if (!sessionId) return '0001';
+    const clean = sessionId.trim();
+
+    if (clean.includes('-')) {
+      const parts = clean.split('-');
+      const last = parts[parts.length - 1].replace(/\D/g, '');
+      if (last.length > 0) {
+        return last.padStart(4, '0').slice(-4);
+      }
+    }
+
+    const digits = clean.replace(/\D/g, '');
+    if (digits.length > 0) {
+      return digits.padStart(4, '0').slice(-4);
+    }
+
+    return '0001';
+  }
+
+  /**
+   * Memformat kode sesi untuk keperluan internal laporan / audit / display terstruktur
    */
   public formatSessionCode(sessionId?: string | null): string {
     if (!sessionId) return 'MJA-0001';
     const clean = sessionId.trim();
 
-    // Jika sudah format MJA-YYYYMMDD-XXXX atau diawali MJA-, kembalikan langsung
-    if (clean.startsWith('MJA-')) return clean;
-    if (clean.startsWith('MJ-')) return 'MJA-' + clean.slice(3);
+    // Jika sudah format terstruktur lengkap MJA-YYYYMMDD-XXXX atau KIOSK-YYYYMMDD-XXXX
+    if (/^[A-Z0-9]+-\d{8}-\d+$/i.test(clean)) {
+      return clean.toUpperCase();
+    }
 
-    // Untuk ID lama (seperti CUID cmvq...)
-    const suffix = (clean.slice(-4) || '0001').toUpperCase();
-    return `MJA-${suffix}`;
+    // Jika ada tanda minus (misal MJA-0005)
+    if (clean.includes('-')) {
+      return clean.toUpperCase();
+    }
+
+    // Jika format legacy CUID
+    if (clean.length > 10) {
+      return `MJA-${clean.slice(-4).toUpperCase()}`;
+    }
+
+    // Format pendek (misal MJA01 atau angka)
+    const digits = clean.replace(/\D/g, '');
+    if (digits.length > 0) {
+      return `MJA-${digits.padStart(4, '0').slice(-4)}`;
+    }
+
+    return `MJA-${clean.slice(-4).toUpperCase()}`;
   }
 
   /**

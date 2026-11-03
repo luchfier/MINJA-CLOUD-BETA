@@ -38,7 +38,7 @@ import { StorageService, type SessionGalleryItem } from './storage.service.js';
 import { EmailService } from './email.service.js';
 import { AppError, ErrorCode } from '../types/common.types.js';
 import { getEnv } from '../config/env.js';
-import { formatSessionCode } from '../utils/session.util.js';
+import { formatSessionCode, formatSessionDigits } from '../utils/session.util.js';
 import { GalleryProgressEngine, GalleryProgressReport } from './galleryProgressEngine.service.js';
 
 export interface GalleryDetails {
@@ -98,10 +98,8 @@ export class DeliveryService {
     const settings = await this.prisma.settings.findFirst();
     const boothName = settings?.boothName || 'Minja Photobooth';
 
-    // Ekstrak 4 digit nomor sesi harian
-    const shortSessionNumber = sessionId.includes('-')
-      ? sessionId.split('-').pop()!
-      : (sessionId.slice(-4) || '0001');
+    // Ekstrak 4 digit nomor sesi harian murni angka (0001 - 9999)
+    const shortSessionNumber = formatSessionDigits(sessionId);
 
     if (existing) {
       if (this.storageService.isCloudStorageActive()) {
@@ -355,7 +353,7 @@ export class DeliveryService {
     const files = await this.storageService.listSessionFiles(sessionId);
 
     return {
-      sessionCode: formatSessionCode(gallery.session.id),
+      sessionCode: formatSessionDigits(gallery.session.id),
       expiresAt: gallery.expiresAt.toISOString(),
       isExpired: false,
       files,
@@ -387,16 +385,28 @@ export class DeliveryService {
       throw new AppError(400, ErrorCode.VALIDATION_ERROR, 'Nomor sesi dan PIN wajib diisi.');
     }
 
+    const sessionDigits = cleanSession.replace(/\D/g, '');
+
+    const orConditions: any[] = [
+      { sessionId: cleanSession },
+      { sessionId: { endsWith: cleanSession } },
+      { sessionId: { endsWith: `-${cleanSession}` } },
+      { token: { startsWith: cleanPin } },
+      { token: cleanPin },
+    ];
+
+    if (sessionDigits.length > 0) {
+      orConditions.push(
+        { sessionId: { endsWith: sessionDigits } },
+        { sessionId: { endsWith: `-${sessionDigits}` } },
+        { sessionId: { endsWith: String(parseInt(sessionDigits, 10)) } }
+      );
+    }
+
     // Cari galeri berdasarkan sessionId penuh atau 4 digit suffix, atau pencarian langsung via token PIN
     const galleries = await this.prisma.gallery.findMany({
       where: {
-        OR: [
-          { sessionId: cleanSession },
-          { sessionId: { endsWith: cleanSession } },
-          { sessionId: { endsWith: `-${cleanSession}` } },
-          { token: { startsWith: cleanPin } },
-          { token: cleanPin },
-        ],
+        OR: orConditions,
       },
       include: { session: true },
       orderBy: { createdAt: 'desc' },
@@ -420,7 +430,7 @@ export class DeliveryService {
       return {
         status: 'expired',
         sessionId: matchedGallery.sessionId,
-        sessionCode: formatSessionCode(matchedGallery.sessionId),
+        sessionCode: formatSessionDigits(matchedGallery.sessionId),
         token: matchedGallery.token,
         expiresAt: matchedGallery.expiresAt.toISOString(),
         createdAt: createdAtIso,
@@ -438,7 +448,7 @@ export class DeliveryService {
       return {
         status: 'processing',
         sessionId: matchedGallery.sessionId,
-        sessionCode: formatSessionCode(matchedGallery.sessionId),
+        sessionCode: formatSessionDigits(matchedGallery.sessionId),
         token: matchedGallery.token,
         expiresAt: matchedGallery.expiresAt.toISOString(),
         createdAt: createdAtIso,
@@ -459,7 +469,7 @@ export class DeliveryService {
     return {
       status: 'ready',
       sessionId: matchedGallery.sessionId,
-      sessionCode: formatSessionCode(matchedGallery.sessionId),
+      sessionCode: formatSessionDigits(matchedGallery.sessionId),
       token: matchedGallery.token,
       expiresAt: matchedGallery.expiresAt.toISOString(),
       createdAt: createdAtIso,
@@ -509,7 +519,7 @@ export class DeliveryService {
       return {
         status: 'expired',
         sessionId: gallery.sessionId,
-        sessionCode: formatSessionCode(gallery.sessionId),
+        sessionCode: formatSessionDigits(gallery.sessionId),
         token: gallery.token,
         expiresAt: gallery.expiresAt.toISOString(),
         createdAt: createdAtIso,
@@ -527,7 +537,7 @@ export class DeliveryService {
       return {
         status: 'processing',
         sessionId: gallery.sessionId,
-        sessionCode: formatSessionCode(gallery.sessionId),
+        sessionCode: formatSessionDigits(gallery.sessionId),
         token: gallery.token,
         expiresAt: gallery.expiresAt.toISOString(),
         createdAt: createdAtIso,
@@ -542,7 +552,7 @@ export class DeliveryService {
     return {
       status: 'ready',
       sessionId: gallery.sessionId,
-      sessionCode: formatSessionCode(gallery.sessionId),
+      sessionCode: formatSessionDigits(gallery.sessionId),
       token: gallery.token,
       expiresAt: gallery.expiresAt.toISOString(),
       createdAt: createdAtIso,

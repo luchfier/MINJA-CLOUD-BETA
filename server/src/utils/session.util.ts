@@ -15,6 +15,14 @@ export function formatSessionCode(sessionId?: string | null): string {
 }
 
 /**
+ * Mengekstrak 4 digit nomor urut sesi murni angka (contoh: '0018', '0001')
+ * Digunakan untuk portal galeri mobile (gallery.minja.my.id) dan input lookup pelanggan
+ */
+export function formatSessionDigits(sessionId?: string | null): string {
+  return getSessionNameEngine().formatSessionDigits(sessionId);
+}
+
+/**
  * Helper untuk parsing komponen nama sesi terstruktur
  */
 export function parseSessionName(sessionId: string): ParsedSessionName {

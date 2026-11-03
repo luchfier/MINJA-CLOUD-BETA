@@ -3,6 +3,7 @@
 // Menampilkan Circular SVG Ring Progress riil, 3 Checklist Mikro dinamis, Petunjuk Dispenser Cetak, dan Banner Penyimpanan 48 Jam
 
 import React, { useEffect, useState } from 'react';
+import { formatSessionDigits } from '../../../services/sessionHelper';
 
 export interface GalleryProcessingProps {
   sessionId: string;
@@ -170,7 +171,7 @@ export const GalleryProcessing: React.FC<GalleryProcessingProps> = ({
               Minja Photobooth
             </span>
             <span className="text-[12px] text-[#47464b] font-['JetBrains_Mono']">
-              Sesi #{sessionCode || `PASS-${sessionId.slice(-4)}`}
+              Sesi #{sessionCode ? sessionCode.replace(/^#+/, '') : formatSessionDigits(sessionId)}
             </span>
           </div>
         </div>

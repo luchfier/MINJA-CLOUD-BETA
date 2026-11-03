@@ -97,4 +97,12 @@ describe('Dedicated SessionNameEngine Test Suite', () => {
     expect(engine.formatSessionCode('cmvqkkwm20001kro6t4cb3csb')).toBe('MJA-3CSB');
     expect(engine.formatSessionCode(null)).toBe('MJA-0001');
   });
+
+  it('8. Format digit angka murni untuk cloud gallery mobile (4 digit angka)', () => {
+    expect(engine.formatSessionDigits('MJA-20261027-0005')).toBe('0005');
+    expect(engine.formatSessionDigits('MJA01-20261103-0018')).toBe('0018');
+    expect(engine.formatSessionDigits('MJA01')).toBe('0001');
+    expect(engine.formatSessionDigits('0018')).toBe('0018');
+    expect(engine.formatSessionDigits(null)).toBe('0001');
+  });
 });

@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { DEFAULT_PAGE_BUILDER_GALLERY } from '../../types/pageBuilder';
+import { formatSessionDigits } from '../../services/sessionHelper';
 import { GallerySessionInput } from './gallery/GallerySessionInput';
 import { GalleryProcessing } from './gallery/GalleryProcessing';
 import { GalleryReadyView, GalleryItem } from './gallery/GalleryReadyView';
@@ -73,7 +74,7 @@ export const GalleryPortalPage: React.FC = () => {
       if (data?.success && data?.data) {
         const d = data.data;
         setSessionId(d.sessionId || sId);
-        setSessionCode(d.sessionCode || `PASS-${sId.slice(-4)}`);
+        setSessionCode(d.sessionCode || formatSessionDigits(sId));
         setToken(d.token || tok);
         setExpiresAt(d.expiresAt || '');
         if (d.createdAt) setCreatedAt(d.createdAt);
@@ -122,7 +123,7 @@ export const GalleryPortalPage: React.FC = () => {
       if (data?.success && data?.data) {
         const d = data.data;
         setSessionId(d.sessionId);
-        setSessionCode(d.sessionCode || `PASS-${pVal || sNum}`);
+        setSessionCode(d.sessionCode || formatSessionDigits(sNum || d.sessionId));
         setToken(d.token || pVal);
         setExpiresAt(d.expiresAt || '');
 

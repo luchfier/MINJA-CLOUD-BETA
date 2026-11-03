@@ -65,7 +65,7 @@ export const GalleryExpired: React.FC<GalleryExpiredProps> = ({
           </div>
           <span className="text-zinc-300 text-[10px] shrink-0">•</span>
           <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-200/80 px-1.5 py-0.5 rounded font-['JetBrains_Mono'] shrink-0">
-            #{sessionCode || 'PASS-7821'}
+            #{sessionCode ? sessionCode.replace(/^#+/, '') : '0001'}
           </span>
           <span className="text-zinc-300 text-[10px] shrink-0">•</span>
           <div className="flex items-center gap-1 text-[#47464b] shrink-0">

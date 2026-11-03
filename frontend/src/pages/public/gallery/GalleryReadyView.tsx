@@ -3,6 +3,7 @@
 // Menampilkan Segmented Control 3 Tab, Frame Asli Kiosk, Single Cut 3:2, Video Klip Momen, Countdown 48 Jam Realtime, dan Master ZIP
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { formatSessionDigits } from '../../../services/sessionHelper';
 
 export interface GalleryItem {
   id?: string;
@@ -187,7 +188,7 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
         </div>
         <span className="text-zinc-300 text-[10px] shrink-0">•</span>
         <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-200/80 px-1.5 py-0.5 rounded font-['JetBrains_Mono'] shrink-0">
-          #{sessionCode || `PASS-${sessionId.slice(-4)}`}
+          #{sessionCode ? sessionCode.replace(/^#+/, '') : formatSessionDigits(sessionId)}
         </span>
         <span className="text-zinc-300 text-[10px] shrink-0">•</span>
         <div className="flex items-center gap-1 text-[#47464b] shrink-0">

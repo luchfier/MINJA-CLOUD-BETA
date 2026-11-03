@@ -3,6 +3,8 @@
 // Sesuai ARCHITECTURE.md §4.2, §5.1 & THE_NEXT_STEP.md §6
 
 import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { DeliveryService } from '../services/delivery.service.js';
 import {
@@ -215,7 +217,8 @@ export async function deliveryRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET /s/:sessionId & GET /gallery/:sessionId
-   * Halaman web galeri mobile interaktif untuk smartphone pelanggan
+   * Menyajikan React Stitch Lumina SPA (index.html) langsung dari backend Fastify,
+   * sehingga routing ke mobile gallery konsisten dan terhindar dari regresi HTML lama.
    */
   const handleHtmlGallery = async (request: any, reply: any) => {
     const { sessionId } = request.params as { sessionId: string };
@@ -228,35 +231,26 @@ export async function deliveryRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    if (!token) {
-      return reply.type('text/html').send(`
-        <!DOCTYPE html>
-        <html><head><title>Akses Ditolak</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-        <body style="font-family:sans-serif; background:#070B14; color:#FFF; display:flex; align-items:center; justify-content:center; height:100vh; text-align:center; padding:20px;">
-          <div>
-            <h1 style="color:#F59E0B; font-size:24px; margin-bottom:8px;">Akses Galeri Ditolak</h1>
-            <p style="color:#94A3B8; font-size:14px;">Token verifikasi galeri tidak ditemukan pada tautan QR.</p>
-          </div>
-        </body></html>
-      `);
+    // 1. Cari file build SPA frontend (dist/index.html)
+    const spaDistCandidates = [
+      path.resolve(process.cwd(), 'frontend/dist'),
+      path.resolve(process.cwd(), '../frontend/dist'),
+      path.resolve(process.cwd(), 'minja-cloud/frontend/dist'),
+      '/var/www/minja-cloud/frontend/dist',
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../frontend/dist'),
+    ];
+
+    for (const distDir of spaDistCandidates) {
+      const indexPath = path.join(distDir, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        const html = fs.readFileSync(indexPath, 'utf-8');
+        return reply.type('text/html').send(html);
+      }
     }
 
-    try {
-      const data = await deliveryService.getGalleryHtmlData(sessionId, token);
-      const html = renderMobileGalleryHtml(data);
-      reply.type('text/html').send(html);
-    } catch (err: any) {
-      return reply.type('text/html').send(`
-        <!DOCTYPE html>
-        <html><head><title>Galeri Tidak Ditemukan</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-        <body style="font-family:sans-serif; background:#070B14; color:#FFF; display:flex; align-items:center; justify-content:center; height:100vh; text-align:center; padding:20px;">
-          <div>
-            <h1 style="color:#EF4444; font-size:24px; margin-bottom:8px;">Galeri Tidak Ditemukan</h1>
-            <p style="color:#94A3B8; font-size:14px;">${err.message || 'Tautan galeri tidak valid atau masa berlaku 48 jam telah berakhir.'}</p>
-          </div>
-        </body></html>
-      `);
-    }
+    // 2. Jika running remote tanpa static file lokal, arahkan ke URL mobile gallery resmi
+    const queryPart = token ? `?token=${encodeURIComponent(token)}` : '';
+    return reply.redirect(302, `https://gallery.minja.my.id/s/${encodeURIComponent(sessionId)}${queryPart}`);
   };
 
   app.get('/s/:sessionId', handleHtmlGallery);
