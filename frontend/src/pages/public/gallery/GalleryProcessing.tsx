@@ -40,6 +40,33 @@ export const GalleryProcessing: React.FC<GalleryProcessingProps> = ({
     liveVideo: { status: 'waiting', label: 'Menunggu giliran...' },
   });
 
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const [copySuccess, setCopySuccess] = useState<boolean>(false);
+
+  // Timer elapsed seconds untuk mendeteksi jaringan lambat (Smart Circuit Breaker)
+  useEffect(() => {
+    const t = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const handleCopyLink = () => {
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(currentUrl).then(() => {
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2500);
+      }).catch(() => {
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2500);
+      });
+    } else {
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2500);
+    }
+  };
+
   // Animasi angka progres meluncur mulus (smooth counter ticker)
   useEffect(() => {
     if (displayProgress === progress) return;
@@ -250,6 +277,47 @@ export const GalleryProcessing: React.FC<GalleryProcessingProps> = ({
           </div>
         </div>
       </div>
+
+      {/* SMART CIRCUIT BREAKER: Bantuan Darurat saat Jaringan Lambat (> 35 Detik) */}
+      {elapsedSeconds >= 35 && (
+        <div className="bg-amber-50/95 border border-amber-300/90 rounded-2xl p-4 space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300 text-left shadow-xs">
+          <div className="flex items-start gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+              <span className="material-symbols-outlined text-[18px]">wifi_tethering_error</span>
+            </div>
+            <div className="flex-1">
+              <h4 className="text-[13px] font-bold text-amber-900 leading-snug">
+                Sinkronisasi Membutuhkan Waktu
+              </h4>
+              <p className="text-[11.5px] text-amber-800/90 leading-relaxed mt-0.5">
+                Koneksi di mesin booth sedang lambat. Tenang, foto tersimpan aman selama 48 jam. Anda bisa membuka galeri sekarang atau menyimpan link sesi.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-0.5">
+            <button
+              type="button"
+              onClick={onReady}
+              className="h-10 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 transition-all text-white text-[12px] font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px]">visibility</span>
+              <span>Buka Galeri Tetap</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="h-10 px-3 rounded-xl bg-white hover:bg-amber-100/60 active:scale-95 transition-all border border-amber-300 text-amber-900 text-[12px] font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+            >
+              <span className="material-symbols-outlined text-[16px]">
+                {copySuccess ? 'check_circle' : 'content_copy'}
+              </span>
+              <span>{copySuccess ? 'Tersalin ✓' : 'Simpan Link Sesi'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Kartu Panduan Selagi Menunggu */}
       <div className="bg-[#f4f2fd] rounded-2xl p-4 space-y-2 border border-zinc-200/80">

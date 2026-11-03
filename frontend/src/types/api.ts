@@ -415,6 +415,7 @@ export interface KioskItem {
   status: KioskStatus;
   paperRemaining: number;
   paperRollCapacity: number;
+  paperTrackingEnabled?: boolean;
   printerStatus: string | null;
   cameraStatus: string | null;
   isLocked: boolean;
@@ -782,6 +783,7 @@ export interface PartnerDrilldownDetails {
     status: string;
     paperRemaining: number;
     paperRollCapacity: number;
+    paperTrackingEnabled?: boolean;
     isLocked: boolean;
     lockReason?: string | null;
     disabledPackageIds?: string[] | null;

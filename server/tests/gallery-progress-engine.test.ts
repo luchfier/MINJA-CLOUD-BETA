@@ -82,15 +82,15 @@ describe('GalleryProgressEngine Unit Test Suite', () => {
     expect(report.items.length).toBe(3);
   });
 
-  it('5. Auto-completes to ready after grace period (12s) when frame layouts are ready even if video is delayed', async () => {
+  it('5. Auto-completes to ready after grace period (60s) when frame layouts are ready even if video is delayed', async () => {
     const mockItems: SessionGalleryItem[] = [
       { id: '1', fileName: 'pose_1.jpg', fileType: 'raw_photo', url: '/p1', sizeBytes: 1000 },
       { id: '2', fileName: 'strip_final.jpg', fileType: 'layout_4r', url: '/s1', sizeBytes: 2000 },
     ];
     vi.spyOn(storageService, 'listSessionGalleryItems').mockResolvedValueOnce(mockItems);
 
-    // Simulasikan sesi dibuat 15 detik yang lalu
-    const oldCreatedAt = new Date(Date.now() - 15000);
+    // Simulasikan sesi dibuat 65 detik yang lalu (> 60s grace period)
+    const oldCreatedAt = new Date(Date.now() - 65000);
     const report = await engine.computeSessionProgress('test_session_grace_period', oldCreatedAt);
 
     expect(report.status).toBe('ready');

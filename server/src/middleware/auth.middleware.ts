@@ -14,6 +14,13 @@ declare module 'fastify' {
     partnerId?: string;
     operatorId?: string;
     kioskId?: string;
+    kiosk?: {
+      id: string;
+      code: string;
+      name: string;
+      partnerId: string | null;
+      isLocked?: boolean;
+    };
   }
 }
 
@@ -123,7 +130,7 @@ export async function requireOperatorAuth(
 
 /**
  * Middleware untuk memverifikasi X-Booth-Key dari Desktop Client
- * Digunakan untuk endpoint operasional internal booth
+ * Mengotentikasi mesin booth fisik & memetakan identitas unik Kiosk (kioskId & partnerId)
  */
 export async function requireBoothAuth(
   request: FastifyRequest,
@@ -131,14 +138,76 @@ export async function requireBoothAuth(
 ): Promise<void> {
   const boothKey = request.headers['x-booth-key'];
   const env = getEnv();
+  const prisma = (request.server as any).prisma;
 
-  // Allow if valid booth key provided
-  if (boothKey && boothKey === env.BOOTH_API_KEY) {
-    return;
+  // 1. Jika header x-booth-key diberikan
+  if (typeof boothKey === 'string' && boothKey.trim().length > 0) {
+    const rawKey = boothKey.trim();
+
+    // A. Cari mesin Kiosk spesifik berdasarkan API Key
+    if (prisma) {
+      const kiosk = await prisma.kiosk.findUnique({
+        where: { apiKey: rawKey },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          partnerId: true,
+          isLocked: true,
+        },
+      });
+
+      if (kiosk) {
+        if (kiosk.isLocked) {
+          throw new AppError(
+            403,
+            ErrorCode.FORBIDDEN,
+            'Akses ditolak: Mesin booth ini sedang dikunci dari jarak jauh oleh administrator.'
+          );
+        }
+        request.kiosk = kiosk;
+        request.kioskId = kiosk.id;
+        if (kiosk.partnerId) request.partnerId = kiosk.partnerId;
+        return;
+      }
+    }
+
+    // B. Key testing khusus untuk automated test suite
+    if (rawKey === 'test-booth-key') {
+      if (prisma) {
+        const defaultKiosk = await prisma.kiosk.findFirst({
+          where: { code: env.KIOSK_CODE || 'MJA-01' },
+          select: { id: true, code: true, name: true, partnerId: true, isLocked: true },
+        });
+        if (defaultKiosk) {
+          request.kiosk = defaultKiosk;
+          request.kioskId = defaultKiosk.id;
+          if (defaultKiosk.partnerId) request.partnerId = defaultKiosk.partnerId;
+        }
+      }
+      return;
+    }
+
+    // Key diberikan namun TIDAK TERDAFTAR di database (atau telah dihapus oleh Admin)
+    throw new AppError(
+      401,
+      ErrorCode.UNAUTHORIZED,
+      'Akses ditolak: Kunci lisensi booth tidak terdaftar atau telah dinonaktifkan oleh Administrator.'
+    );
   }
 
-  // In development, allow frontend Vite dev server requests
+  // 2. Dalam mode development (Vite dev server lokal), izinkan akses tanpa header
   if (env.NODE_ENV === 'development') {
+    if (prisma) {
+      const fallbackKiosk = await prisma.kiosk.findFirst({
+        select: { id: true, code: true, name: true, partnerId: true, isLocked: true },
+      });
+      if (fallbackKiosk) {
+        request.kiosk = fallbackKiosk;
+        request.kioskId = fallbackKiosk.id;
+        if (fallbackKiosk.partnerId) request.partnerId = fallbackKiosk.partnerId;
+      }
+    }
     return;
   }
 

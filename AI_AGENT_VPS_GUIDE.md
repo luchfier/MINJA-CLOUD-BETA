@@ -46,19 +46,22 @@ sudo npm install -g pm2
 
 ## 3. Langkah Instalasi Step-by-Step
 
-### Langkah 3.1: Ekstrak File Project
-Ekstrak arsip `minja-cloud.zip` ke direktori web standar `/var/www/minja-cloud`:
+### Langkah 3.0: Clone / Update Kode dari GitHub
+Gunakan repository resmi **`MINJA-CLOUD-BETA`**:
 
 ```bash
-sudo mkdir -p /var/www/minja-cloud
-sudo chown -R $USER:$USER /var/www/minja-cloud
+# Untuk instalasi baru pertama kali:
+sudo mkdir -p /var/www
+sudo chown -R $USER:$USER /var/www
+git clone https://github.com/luchfier/MINJA-CLOUD-BETA.git /var/www/minja-cloud
 cd /var/www/minja-cloud
 
-# Jika mengunggah zip dari komputer lokal:
-unzip -q /path/ke/minja-cloud.zip -d /var/www/minja-cloud
+# ATAU untuk update kode yang sudah ada:
+cd /var/www/minja-cloud
+git pull origin main
 ```
 
-### Langkah 3.2: Konfigurasi File Environment Server (`server/.env`)
+### Langkah 3.1: Konfigurasi File Environment Server (`server/.env`)
 Salin template environment dan sesuaikan dengan kredensial Supabase & Cloudflare R2 Anda:
 
 ```bash
@@ -67,9 +70,11 @@ cp .env.example .env
 nano .env
 ```
 
+> 💡 **PENTING:** Kredensial Midtrans (`MIDTRANS_SERVER_KEY`) **TIDAK DIBUTUHKAN** di VPS Cloud. Pemrosesan pembayaran QRIS/Tunai dilakukan langsung oleh unit Kiosk mandiri (`minja-app`). VPS Cloud fokus pada manajemen armada (*fleet*), portal multi-tenant, dan hosting galeri 48 jam.
+
 **Contoh isi `.env` produksi yang valid:**
 ```ini
-# 1. DATABASE UTAMA (PostgreSQL via Supabase)
+# 1. DATABASE UTAMA (PostgreSQL via Supabase / Dedicated Postgres)
 # Jika menggunakan Supabase Transaction Pooler (Port 6543) - Sangat direkomendasikan untuk VPS:
 DATABASE_URL="postgresql://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
 DIRECT_URL="postgresql://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres"

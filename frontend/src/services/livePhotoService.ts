@@ -16,8 +16,8 @@ export interface LivePhotoResult {
 export function getLivePhotoCanonicalUrl(sessionId: string): string {
   if (typeof window !== 'undefined') {
     const { hostname, port, protocol } = window.location;
-    const hostBase = port === '5173' ? `${protocol}//${hostname}:3000` : window.location.origin;
+    const hostBase = port === '5174' || port === '5173' ? `${protocol}//${hostname}:4000` : window.location.origin;
     return `${hostBase}/storage/galleries/${encodeURIComponent(sessionId)}/layout_live_4r.mp4`;
   }
-  return `http://localhost:3000/storage/galleries/${encodeURIComponent(sessionId)}/layout_live_4r.mp4`;
+  return `http://localhost:4000/storage/galleries/${encodeURIComponent(sessionId)}/layout_live_4r.mp4`;
 }

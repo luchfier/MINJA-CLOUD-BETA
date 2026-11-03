@@ -6,14 +6,18 @@
 import type { PrismaClient } from '@prisma/client';
 import { getEnv } from '../config/env.js';
 import { OwnerService } from './owner.service.js';
+import { PrintService } from './print.service.js';
 import { humanLogger } from '../utils/humanLogger.js';
 
 export class KioskHeartbeatService {
   private timer: NodeJS.Timeout | null = null;
   private isRunning = false;
   private consecutiveFailures = 0;
+  private printService: PrintService;
 
-  constructor(private prisma: PrismaClient) {}
+  constructor(private prisma: PrismaClient, printService?: PrintService) {
+    this.printService = printService || new PrintService(prisma);
+  }
 
   /**
    * Memulai daemon heartbeat jika BOOTH_API_KEY terkonfigurasi
@@ -96,6 +100,16 @@ export class KioskHeartbeatService {
       });
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 404) {
+          humanLogger.warn('HEARTBEAT', `Kunci lisensi booth ditolak server pusat (HTTP ${response.status}). Kiosk dinonaktifkan.`);
+          OwnerService.currentMaintenanceReason = 'Kunci lisensi booth tidak terdaftar atau telah dinonaktifkan oleh Administrator.';
+          if (settings && !settings.maintenanceMode) {
+            await this.prisma.settings.update({
+              where: { id: settings.id },
+              data: { maintenanceMode: true },
+            });
+          }
+        }
         this.consecutiveFailures++;
         if (this.consecutiveFailures === 1 || this.consecutiveFailures % 20 === 0) {
           humanLogger.info('HEARTBEAT', `Telemetri cloud standby (${endpoint}): HTTP ${response.status}.`);
@@ -107,7 +121,30 @@ export class KioskHeartbeatService {
       this.consecutiveFailures = 0;
 
       if (resJson.success && resJson.data) {
-        const { isLocked, lockReason } = resJson.data;
+        const { isLocked, lockReason, pendingPrintCommands } = resJson.data;
+
+        // Tangani perintah cetak ulang darurat (Emergency Reprint) dari Cloud / Operator Portal
+        if (Array.isArray(pendingPrintCommands) && pendingPrintCommands.length > 0) {
+          for (const cmd of pendingPrintCommands) {
+            humanLogger.warn(
+              'REMOTE_REPRINT',
+              `Menerima perintah Cetak Ulang dari Operator (${cmd.requestedBy || 'Kasir'}) untuk Sesi: ${cmd.sessionId} (${cmd.copies} lembar) [Alasan: "${cmd.reason}"]`
+            );
+            try {
+              const reprintRes = await this.printService.reprintJob({
+                sessionId: cmd.sessionId,
+                copies: cmd.copies || 1,
+                reason: cmd.reason || `Remote reprint oleh ${cmd.requestedBy || 'Kasir'}`,
+              });
+              humanLogger.success(
+                'REMOTE_REPRINT',
+                `✅ Perintah Cetak Ulang Sesi ${cmd.sessionId} berhasil dieksekusi ke printer! (${reprintRes.message})`
+              );
+            } catch (printErr: any) {
+              console.error(`[KioskHeartbeat] Gagal mengeksekusi reprint sesi ${cmd.sessionId}:`, printErr);
+            }
+          }
+        }
 
         // Sinkronkan status lock dari cloud ke mesin booth lokal
         if (isLocked && !currentMaintenance) {

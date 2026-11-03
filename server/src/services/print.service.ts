@@ -479,9 +479,44 @@ export class PrintService {
     let targetFile = latestMatch ? path.join(this.printStorageDir, latestMatch) : null;
 
     if (!targetFile || !fs.existsSync(targetFile)) {
-      // Buat file placeholder darurat agar operator tetap bisa menguji
-      targetFile = path.join(this.printStorageDir, `${input.sessionId}_reprint_placeholder.jpg`);
-      this.generateCalibrationImage(targetFile, `REPRINT SESI: ${input.sessionId}`);
+      if (this.prisma) {
+        try {
+          const photo = await this.prisma.photo.findFirst({
+            where: { sessionId: input.sessionId, isSelected: true },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (photo && photo.storageUrl) {
+            if (photo.storageUrl.startsWith('http://') || photo.storageUrl.startsWith('https://')) {
+              try {
+                const response = await fetch(photo.storageUrl);
+                if (response.ok) {
+                  const arrayBuffer = await response.arrayBuffer();
+                  const recoveredPath = path.join(this.printStorageDir, `${input.sessionId}_recovered_print.jpg`);
+                  fs.writeFileSync(recoveredPath, Buffer.from(arrayBuffer));
+                  targetFile = recoveredPath;
+                  humanLogger.success('REPRINT', `Foto cetak sesi ${input.sessionId} berhasil diunduh dari Cloud R2!`);
+                }
+              } catch (dlErr) {
+                console.warn('[PrintService] Gagal mengunduh foto sesi dari Cloud Storage:', dlErr);
+              }
+            } else if (photo.storageUrl.startsWith('/storage/')) {
+              const rel = photo.storageUrl.replace(/^\/storage\//, '');
+              const resolved = path.resolve(__dirname, '../../storage', rel);
+              if (fs.existsSync(resolved)) {
+                targetFile = resolved;
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn('[PrintService] Gagal memulihkan foto dari database:', fetchErr);
+        }
+      }
+
+      if (!targetFile || !fs.existsSync(targetFile)) {
+        // Buat file placeholder darurat agar operator tetap bisa menguji
+        targetFile = path.join(this.printStorageDir, `${input.sessionId}_reprint_placeholder.jpg`);
+        this.generateCalibrationImage(targetFile, `REPRINT SESI: ${input.sessionId}`);
+      }
     }
 
     const allPrinters = await this.listPrinters();

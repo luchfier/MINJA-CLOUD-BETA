@@ -159,15 +159,20 @@ export class AccessCodeService {
 
   /**
    * Menukarkan kode akses di Kiosk Pelanggan (Atomic Redemption)
+   * Menegakkan isolasi Kiosk & Partner agar kode tidak bisa dibobol antar-booth
    */
-  async redeemAccessCode(sessionId: string, rawCode: string) {
+  async redeemAccessCode(
+    sessionId: string,
+    rawCode: string,
+    callerKiosk?: { id?: string; code?: string; name?: string; partnerId?: string | null }
+  ) {
     const code = rawCode.trim().toUpperCase();
 
     return this.prisma.$transaction(async (tx) => {
       // 1. Validasi Kode Akses
       const accessCode = await tx.accessCode.findUnique({
         where: { code },
-        include: { package: true },
+        include: { package: true, kiosk: true, partner: true },
       });
 
       if (!accessCode) {
@@ -199,7 +204,34 @@ export class AccessCodeService {
         );
       }
 
-      // 2. Validasi Sesi Kiosk
+      // ==============================================================
+      // 2. ISOLASI MULTI-KIOSK & MULTI-TENANT (CROSS-BOOTH LOCKOUT)
+      // ==============================================================
+      // A. Jika kode akses diterbitkan khusus untuk Kiosk fisik tertentu
+      if (accessCode.kioskId) {
+        if (!callerKiosk?.id || callerKiosk.id !== accessCode.kioskId) {
+          const targetKioskName = accessCode.kiosk?.name || accessCode.kiosk?.code || 'booth lain';
+          throw new AppError(
+            403,
+            ErrorCode.FORBIDDEN,
+            `Kode akses ini hanya berlaku untuk ${targetKioskName} dan tidak dapat digunakan pada unit booth ini.`
+          );
+        }
+      }
+
+      // B. Jika kode akses diterbitkan untuk Mitra/Partner tertentu
+      if (accessCode.partnerId) {
+        if (!callerKiosk?.partnerId || callerKiosk.partnerId !== accessCode.partnerId) {
+          const targetPartnerName = accessCode.partner?.name || 'mitra tertentu';
+          throw new AppError(
+            403,
+            ErrorCode.FORBIDDEN,
+            `Kode akses ini diterbitkan khusus gerai [${targetPartnerName}] dan tidak berlaku di booth ini.`
+          );
+        }
+      }
+
+      // 3. Validasi Sesi Kiosk
       const session = await tx.session.findUnique({
         where: { id: sessionId },
         include: { package: true },
@@ -280,15 +312,21 @@ export class AccessCodeService {
 
   /**
    * Menukarkan kode akses CETAK TAMBAHAN (EXTRA_PRINT) di Kiosk Pelanggan
+   * Menegakkan isolasi Kiosk & Partner agar kode tidak bisa dibobol antar-booth
    */
-  async redeemExtraPrintAccessCode(sessionId: string, rawCode: string, requiredPrints?: number) {
+  async redeemExtraPrintAccessCode(
+    sessionId: string,
+    rawCode: string,
+    requiredPrints?: number,
+    callerKiosk?: { id?: string; code?: string; name?: string; partnerId?: string | null }
+  ) {
     const code = rawCode.trim().toUpperCase();
 
     return this.prisma.$transaction(async (tx) => {
       // 1. Validasi Kode Akses
       const accessCode = await tx.accessCode.findUnique({
         where: { code },
-        include: { package: true },
+        include: { package: true, kiosk: true, partner: true },
       });
 
       if (!accessCode) {
@@ -318,6 +356,31 @@ export class AccessCodeService {
           ErrorCode.VALIDATION_ERROR,
           `Kode ${code} adalah tiket Sesi Foto Baru, bukan untuk cetak tambahan.`
         );
+      }
+
+      // ==============================================================
+      // 2. ISOLASI MULTI-KIOSK & MULTI-TENANT (CROSS-BOOTH LOCKOUT)
+      // ==============================================================
+      if (accessCode.kioskId) {
+        if (!callerKiosk?.id || callerKiosk.id !== accessCode.kioskId) {
+          const targetKioskName = accessCode.kiosk?.name || accessCode.kiosk?.code || 'booth lain';
+          throw new AppError(
+            403,
+            ErrorCode.FORBIDDEN,
+            `Kode tiket cetak ini hanya berlaku untuk ${targetKioskName} dan tidak dapat digunakan pada unit booth ini.`
+          );
+        }
+      }
+
+      if (accessCode.partnerId) {
+        if (!callerKiosk?.partnerId || callerKiosk.partnerId !== accessCode.partnerId) {
+          const targetPartnerName = accessCode.partner?.name || 'mitra tertentu';
+          throw new AppError(
+            403,
+            ErrorCode.FORBIDDEN,
+            `Kode tiket cetak ini diterbitkan khusus gerai [${targetPartnerName}] dan tidak berlaku di booth ini.`
+          );
+        }
       }
 
       const grantedPrints = accessCode.extraPrints > 0 ? accessCode.extraPrints : 1;

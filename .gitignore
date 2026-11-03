@@ -25,6 +25,8 @@ pino-*.log
 # Storage temporary data & caches
 **/storage/galleries/**
 **/storage/prints/**
+**/storage/branding/**
+**/storage/kiosk-settings.json
 **/storage/sync-queue.json
 **/storage/session-counter.json
 **/storage/timing-config.json

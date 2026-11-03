@@ -655,6 +655,8 @@ export class PaymentService {
           where: { id: payment.id },
           data: {
             transactionStatus: 'settlement',
+            paymentType: 'TEST_BYPASS',
+            grossAmount: 0,
             isVerified: true,
             settlementTime,
           },
@@ -663,6 +665,9 @@ export class PaymentService {
           where: { id: payment.sessionId },
           data: {
             state: 'PAYMENT_CONFIRMED',
+            totalPrice: 0,
+            basePrice: 0,
+            additionalPrintCost: 0,
           },
         }),
       ]);
@@ -670,11 +675,11 @@ export class PaymentService {
 
     return {
       orderId: payment.orderId,
-      paymentMethod: payment.paymentType as 'qris' | 'cash',
+      paymentMethod: (payment.paymentType === 'TEST_BYPASS' || payment.paymentType === 'cash' ? 'cash' : 'qris') as 'qris' | 'cash',
       transactionStatus: 'settlement',
       settlementTime: settlementTime.toISOString(),
       isVerified: true,
-      grossAmount: payment.grossAmount,
+      grossAmount: 0,
     };
   }
 }

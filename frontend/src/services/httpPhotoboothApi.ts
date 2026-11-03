@@ -40,21 +40,52 @@ export function getApiBaseUrl(): string {
   if (envUrl) return envUrl;
   if (typeof window !== 'undefined') {
     const { hostname, port, protocol } = window.location;
-    if (port === '5173') {
-      return `${protocol}//${hostname}:3000/api`;
+    if (port === '5174' || port === '5173') {
+      return `${protocol}//${hostname}:4000/api`;
     }
     return `${window.location.origin}/api`;
   }
-  return 'http://localhost:3000/api';
+  return 'http://localhost:4000/api';
 }
 
 const API_BASE = getApiBaseUrl();
 const BOOTH_KEY = (import.meta as any).env?.VITE_BOOTH_KEY || 'dev-booth-key-for-testing';
 
+export function isJwtExpired(token: string | null | undefined): boolean {
+  if (!token) return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const payload = JSON.parse(jsonPayload);
+    if (!payload.exp) return false;
+    // Expire 10 detik lebih awal untuk margin aman
+    return Date.now() >= (payload.exp * 1000 - 10000);
+  } catch {
+    return true;
+  }
+}
+
 function notifyUnauthorized(url?: string): void {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('minja:unauthorized', { detail: { url } }));
   }
+}
+
+async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init);
+  if (res.status === 401) {
+    const urlStr = typeof input === 'string' ? input : (input as any)?.url || '';
+    notifyUnauthorized(urlStr);
+  }
+  return res;
 }
 
 function errResponse<T>(code: string, message: string): ApiResponse<T> {
@@ -91,6 +122,15 @@ const DEFAULT_PUBLIC_BRANDING: PublicBrandingConfig = {
   promoSubheadline:
     'Hadirkan keseruan tanpa batas di pesta Anda dengan cetak foto lab studio 10×15 cm unlimited, desain frame kustom nama pengantin / logo acara, properti foto, dan crew ramah yang siap memeriahkan pesta Anda.',
   livePhotoEnabled: true,
+  welcomeAnimationType: 'floating-sparkles',
+  welcomeMusicEnabled: false,
+  welcomeMusicVolume: 40,
+  welcomeMusicPreset: 'lofi-chill',
+  welcomeMusicCustomUrl: '',
+  footerFeature1: 'Kamera Studio High Definition',
+  footerFeature2: 'Foto Jernih & Langsung Jadi ✨',
+  footerFeature3: 'Soft File QR & Email Otomatis',
+  footerTouchPrompt: 'Sentuh layar di mana saja untuk memulai',
 };
 
 // Fallback template frame kosong jika backend belum memuat template
@@ -102,29 +142,29 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 1. Public Settings
   async getPublicSettings(): Promise<ApiResponse<PublicBrandingConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/settings`);
+      const res = await apiFetch(`${API_BASE}/settings`);
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
           const d = json.data;
           const config: PublicBrandingConfig = {
             boothName: d.boothName || DEFAULT_PUBLIC_BRANDING.boothName,
-            tagline: d.brandTitle || DEFAULT_PUBLIC_BRANDING.tagline,
+            tagline: d.brandTitle || d.tagline || DEFAULT_PUBLIC_BRANDING.tagline,
             logoUrl: d.logoUrl || '',
             wallpaperUrl: d.wallpaperUrl || '',
-            welcomeHeadline: d.welcomeText || DEFAULT_PUBLIC_BRANDING.welcomeHeadline,
-            welcomeSubheadline: DEFAULT_PUBLIC_BRANDING.welcomeSubheadline,
-            startSessionButtonText: DEFAULT_PUBLIC_BRANDING.startSessionButtonText,
+            welcomeHeadline: d.welcomeText || d.welcomeHeadline || DEFAULT_PUBLIC_BRANDING.welcomeHeadline,
+            welcomeSubheadline: d.welcomeSubheadline || DEFAULT_PUBLIC_BRANDING.welcomeSubheadline,
+            startSessionButtonText: d.startSessionButtonText || DEFAULT_PUBLIC_BRANDING.startSessionButtonText,
             primaryColor: d.primaryColor || DEFAULT_PUBLIC_BRANDING.primaryColor,
-            accentColor: d.secondaryColor || DEFAULT_PUBLIC_BRANDING.accentColor,
-            darkSurfaceColor: DEFAULT_PUBLIC_BRANDING.darkSurfaceColor,
-            backgroundBlur: 8,
-            backgroundOverlayOpacity: 50,
-            backgroundFit: 'cover',
-            backgroundOpacity: 100,
-            logoHeight: 64,
-            glassmorphismIntensity: 'medium',
-            enableVignette: true,
+            accentColor: d.secondaryColor || d.accentColor || DEFAULT_PUBLIC_BRANDING.accentColor,
+            darkSurfaceColor: d.darkSurfaceColor || DEFAULT_PUBLIC_BRANDING.darkSurfaceColor,
+            backgroundBlur: d.backgroundBlur ?? DEFAULT_PUBLIC_BRANDING.backgroundBlur ?? 8,
+            backgroundOverlayOpacity: d.backgroundOverlayOpacity ?? DEFAULT_PUBLIC_BRANDING.backgroundOverlayOpacity ?? 50,
+            backgroundFit: d.backgroundFit || DEFAULT_PUBLIC_BRANDING.backgroundFit || 'cover',
+            backgroundOpacity: d.backgroundOpacity ?? DEFAULT_PUBLIC_BRANDING.backgroundOpacity ?? 100,
+            logoHeight: d.logoHeight ?? DEFAULT_PUBLIC_BRANDING.logoHeight ?? 64,
+            glassmorphismIntensity: d.glassmorphismIntensity || DEFAULT_PUBLIC_BRANDING.glassmorphismIntensity || 'medium',
+            enableVignette: d.enableVignette !== undefined ? d.enableVignette : true,
             whatsappNumber: d.whatsappNumber || DEFAULT_PUBLIC_BRANDING.whatsappNumber,
             instagramHandle: d.instagramHandle || DEFAULT_PUBLIC_BRANDING.instagramHandle,
             studioAddress: d.studioAddress || DEFAULT_PUBLIC_BRANDING.studioAddress,
@@ -149,7 +189,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async getPackages(kioskId?: string): Promise<ApiResponse<PackageItem[]>> {
     try {
       const url = kioskId ? `${API_BASE}/packages?kioskId=${encodeURIComponent(kioskId)}` : `${API_BASE}/packages`;
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
@@ -183,7 +223,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async calculatePrice(req: CalculatePriceRequest): Promise<ApiResponse<CalculatePriceResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/packages/calculate-price`, {
+      const res = await apiFetch(`${API_BASE}/packages/calculate-price`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
@@ -205,7 +245,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async validateVoucher(req: ValidateVoucherRequest): Promise<ApiResponse<ValidateVoucherResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/vouchers/validate`, {
+      const res = await apiFetch(`${API_BASE}/vouchers/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -246,7 +286,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async createSession(packageId: string): Promise<ApiResponse<CustomerSession>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions`, {
+      const res = await apiFetch(`${API_BASE}/sessions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -297,7 +337,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     voucherCode?: string
   ): Promise<ApiResponse<CreatePaymentResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/payments`, {
+      const res = await apiFetch(`${API_BASE}/payments`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -342,7 +382,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     paymentMethod: PaymentMethod = 'qris'
   ): Promise<ApiResponse<CreatePaymentResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/payments/extra-prints`, {
+      const res = await apiFetch(`${API_BASE}/payments/extra-prints`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -383,7 +423,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async checkPaymentStatus(orderId: string): Promise<ApiResponse<PaymentStatusCheckResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/payments/${encodeURIComponent(orderId)}/status`, {
+      const res = await apiFetch(`${API_BASE}/payments/${encodeURIComponent(orderId)}/status`, {
         headers: { 'X-Booth-Key': BOOTH_KEY },
       });
       const json = await res.json().catch(() => null);
@@ -413,7 +453,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async cancelSession(sessionId: string): Promise<ApiResponse<{ cancelled: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/cancel`, {
         method: 'POST',
         headers: { 'X-Booth-Key': BOOTH_KEY },
       });
@@ -430,7 +470,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async forcePaymentSettlement(orderId: string): Promise<ApiResponse<PaymentStatusCheckResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/payments/${encodeURIComponent(orderId)}/settle`, {
+      const res = await apiFetch(`${API_BASE}/payments/${encodeURIComponent(orderId)}/settle`, {
         method: 'POST',
         headers: { 'X-Booth-Key': BOOTH_KEY },
       });
@@ -464,7 +504,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     _templateId?: string
   ): Promise<ApiResponse<{ success: boolean; sessionCode: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/complete`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/complete`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -497,7 +537,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 3. Templates (Otoritas Penuh Database Server; Starter Frames HANYA Saat Fresh Install)
   async getTemplates(): Promise<ApiResponse<TemplateItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/templates`);
+      const res = await apiFetch(`${API_BASE}/templates`);
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
@@ -552,7 +592,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async sendEmail(sessionId: string, email: string): Promise<ApiResponse<{ sent: boolean; messageId: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/email`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/email`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -573,7 +613,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getGalleryUrl(sessionId: string): Promise<ApiResponse<{ qrString: string; galleryUrl: string; expiresAt: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/gallery-url`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/gallery-url`, {
         headers: { 'X-Booth-Key': BOOTH_KEY },
       });
       const json = await res.json().catch(() => null);
@@ -597,7 +637,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       let finalDataUrl = dataUrl;
       if (dataUrl && dataUrl.startsWith('blob:')) {
         try {
-          const resp = await fetch(dataUrl);
+          const resp = await apiFetch(dataUrl);
           const blob = await resp.blob();
           finalDataUrl = await new Promise<string>((resolve) => {
             const reader = new FileReader();
@@ -618,7 +658,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
               ? 'live_video'
               : 'layout_4r';
 
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/gallery/upload`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/gallery/upload`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -673,7 +713,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     error?: string;
   }>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/live-photo/compose`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/live-photo/compose`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -718,7 +758,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     error?: string;
   }>> {
     try {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/slideshow/compose`, {
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/slideshow/compose`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -746,7 +786,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       return url;
     }
     try {
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (!res.ok) return url;
       const blob = await res.blob();
       return await new Promise<string>((resolve) => {
@@ -832,7 +872,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       }
 
       // Prioritas 2 (HTTP REST Fallback untuk Dev Browser Preview):
-      const res = await fetch(`${API_BASE}/renderer/render-photo`, {
+      const res = await apiFetch(`${API_BASE}/renderer/render-photo`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -858,7 +898,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 4. Admin Auth
   async loginAdmin(pin: string): Promise<ApiResponse<{ token: string; expiresIn: number }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/login`, {
+      const res = await apiFetch(`${API_BASE}/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin }),
@@ -876,7 +916,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async changePin(token: string, currentPin: string, newPin: string): Promise<ApiResponse<{ message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/change-pin`, {
+      const res = await apiFetch(`${API_BASE}/admin/change-pin`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -898,7 +938,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 5. Admin Settings
   async getAdminSettings(token: string): Promise<ApiResponse<AdminThemeConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/settings`, {
+      const res = await apiFetch(`${API_BASE}/admin/settings`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -916,21 +956,30 @@ class HttpPhotoboothApi implements IPhotoboothApi {
           startSessionButtonText: d.startSessionButtonText || DEFAULT_PUBLIC_BRANDING.startSessionButtonText,
           primaryColor: d.primaryColor || DEFAULT_PUBLIC_BRANDING.primaryColor,
           accentColor: d.secondaryColor || d.accentColor || DEFAULT_PUBLIC_BRANDING.accentColor,
-          darkSurfaceColor: DEFAULT_PUBLIC_BRANDING.darkSurfaceColor,
+          darkSurfaceColor: d.darkSurfaceColor || DEFAULT_PUBLIC_BRANDING.darkSurfaceColor,
           logoUrl: d.logoUrl || '',
           wallpaperUrl: d.wallpaperUrl || '',
-          logoHeight: 64,
-          backgroundOverlayOpacity: 50,
-          backgroundBlur: 8,
-          glassmorphismIntensity: 'medium',
-          enableVignette: true,
+          logoHeight: d.logoHeight ?? DEFAULT_PUBLIC_BRANDING.logoHeight ?? 64,
+          backgroundOverlayOpacity: d.backgroundOverlayOpacity ?? DEFAULT_PUBLIC_BRANDING.backgroundOverlayOpacity ?? 50,
+          backgroundBlur: d.backgroundBlur ?? DEFAULT_PUBLIC_BRANDING.backgroundBlur ?? 8,
+          backgroundFit: d.backgroundFit || DEFAULT_PUBLIC_BRANDING.backgroundFit || 'cover',
+          backgroundOpacity: d.backgroundOpacity ?? DEFAULT_PUBLIC_BRANDING.backgroundOpacity ?? 100,
+          glassmorphismIntensity: d.glassmorphismIntensity || DEFAULT_PUBLIC_BRANDING.glassmorphismIntensity || 'medium',
+          enableVignette: d.enableVignette !== undefined ? d.enableVignette : true,
+          whatsappNumber: d.whatsappNumber || DEFAULT_PUBLIC_BRANDING.whatsappNumber,
+          instagramHandle: d.instagramHandle || DEFAULT_PUBLIC_BRANDING.instagramHandle,
+          studioAddress: d.studioAddress || DEFAULT_PUBLIC_BRANDING.studioAddress,
+          promoHeadline: d.promoHeadline || DEFAULT_PUBLIC_BRANDING.promoHeadline,
+          promoSubheadline: d.promoSubheadline || DEFAULT_PUBLIC_BRANDING.promoSubheadline,
+          eventPackages: d.eventPackages || DEFAULT_PUBLIC_BRANDING.eventPackages,
+          livePhotoEnabled: d.livePhotoEnabled !== undefined ? d.livePhotoEnabled : true,
+          pageBuilderLanding: d.pageBuilderLanding || undefined,
+          pageBuilderGallery: d.pageBuilderGallery || undefined,
+          customCss: d.customCss || '',
           sessionTimeoutSeconds: d.sessionTimeoutSeconds || 180,
           paymentTimeoutSeconds: d.paymentTimeoutSeconds || 120,
           photoRetentionHours: d.photoRetentionHours || 48,
           extraPrintPrice: d.extraPrintPrice || 15000,
-          pageBuilderLanding: d.pageBuilderLanding || undefined,
-          pageBuilderGallery: d.pageBuilderGallery || undefined,
-          customCss: d.customCss || '',
         };
         return { success: true, data: config, timestamp: json.timestamp || new Date().toISOString() };
       }
@@ -943,13 +992,18 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updateAdminSettings(token: string, settings: Partial<AdminThemeConfig>): Promise<ApiResponse<AdminThemeConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/settings`, {
+      const payload: Record<string, any> = { ...settings };
+      if (settings.tagline) payload.brandTitle = settings.tagline;
+      if (settings.welcomeHeadline) payload.welcomeText = settings.welcomeHeadline;
+      if (settings.accentColor) payload.secondaryColor = settings.accentColor;
+
+      const res = await apiFetch(`${API_BASE}/admin/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(payload),
       });
       if (res.status === 401) {
         notifyUnauthorized();
@@ -969,7 +1023,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 6. Admin Packages
   async getAdminPackages(token: string): Promise<ApiResponse<PackageItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/packages`, {
+      const res = await apiFetch(`${API_BASE}/admin/packages`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -1015,7 +1069,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       const maxSelections = Number((pkg as any).maxSelections) || Math.min(maxShots, 6);
       const badgeVal = (pkg as any).badge?.trim() || (pkg as any).badgeText?.trim() || null;
 
-      const res = await fetch(`${API_BASE}/admin/packages`, {
+      const res = await apiFetch(`${API_BASE}/admin/packages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1081,7 +1135,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (pkg.isActive !== undefined) payload.isActive = pkg.isActive;
       if (pkg.sortOrder !== undefined) payload.sortOrder = Number(pkg.sortOrder);
 
-      const res = await fetch(`${API_BASE}/admin/packages/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/packages/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1118,7 +1172,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deletePackage(token: string, id: string): Promise<ApiResponse<{ message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/packages/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/packages/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1136,7 +1190,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 7. Admin Templates (CRUD Eksklusif PostgreSQL)
   async getAdminTemplates(token: string): Promise<ApiResponse<TemplateItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/templates?limit=100`, {
+      const res = await apiFetch(`${API_BASE}/admin/templates?limit=100`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -1195,7 +1249,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
         : (tpl.slots.length === 1 ? 'single' : 'grid');
       const frameLayer = tpl.frameLayer || 'overlay';
 
-      const res = await fetch(`${API_BASE}/admin/templates`, {
+      const res = await apiFetch(`${API_BASE}/admin/templates`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1247,7 +1301,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
         ? tpl.category
         : (tpl.slots ? (tpl.slots.length === 1 ? 'single' : 'grid') : undefined);
 
-      const res = await fetch(`${API_BASE}/admin/templates/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/templates/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1293,7 +1347,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deleteTemplate(token: string, id: string): Promise<ApiResponse<{ message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/templates/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/templates/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1311,7 +1365,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 8. Admin Vouchers
   async getAdminVouchers(token: string): Promise<ApiResponse<VoucherItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/vouchers`, {
+      const res = await apiFetch(`${API_BASE}/admin/vouchers`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -1356,7 +1410,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     voucher: Omit<VoucherItem, 'id' | 'usedCount' | 'createdAt'>
   ): Promise<ApiResponse<VoucherItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/vouchers`, {
+      const res = await apiFetch(`${API_BASE}/admin/vouchers`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1406,7 +1460,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updateVoucher(token: string, id: string, voucher: Partial<VoucherItem>): Promise<ApiResponse<VoucherItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/vouchers/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/vouchers/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1456,7 +1510,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deleteVoucher(token: string, id: string): Promise<ApiResponse<{ message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/vouchers/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/vouchers/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1474,7 +1528,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 9. Cash Desk
   async getCashPendingTransactions(token: string): Promise<ApiResponse<CashPendingTransaction[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/cash/pending`, {
+      const res = await apiFetch(`${API_BASE}/admin/cash/pending`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -1497,7 +1551,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     req: CashConfirmationRequest
   ): Promise<ApiResponse<CashConfirmationResponse>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/cash/confirm`, {
+      const res = await apiFetch(`${API_BASE}/admin/cash/confirm`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1518,7 +1572,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getCashAuditLogs(token: string): Promise<ApiResponse<CashAuditLogItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/cash/audit-logs`, {
+      const res = await apiFetch(`${API_BASE}/admin/cash/audit-logs`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const json = await res.json().catch(() => null);
@@ -1545,7 +1599,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.startDate) p.set('startDate', params.startDate);
       if (params?.endDate) p.set('endDate', params.endDate);
 
-      const res = await fetch(`${API_BASE}/admin/reports/summary?${p.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/admin/reports/summary?${p.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -1577,7 +1631,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.startDate) p.set('startDate', params.startDate);
       if (params?.endDate) p.set('endDate', params.endDate);
 
-      const res = await fetch(`${API_BASE}/admin/reports/transactions?${p.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/admin/reports/transactions?${p.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) {
@@ -1607,7 +1661,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.startDate) p.set('startDate', params.startDate);
       if (params?.endDate) p.set('endDate', params.endDate);
 
-      const res = await fetch(`${API_BASE}/admin/reports/export/csv?${p.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/admin/reports/export/csv?${p.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -1622,7 +1676,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 11. Creative Assets (Fonts & Stickers)
   async getPublicFonts(): Promise<ApiResponse<FontItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/public/assets/fonts`);
+      const res = await apiFetch(`${API_BASE}/public/assets/fonts`);
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
@@ -1637,7 +1691,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPublicStickers(): Promise<ApiResponse<StickerItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/public/assets/stickers`);
+      const res = await apiFetch(`${API_BASE}/public/assets/stickers`);
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
@@ -1652,7 +1706,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getAdminFonts(token: string): Promise<ApiResponse<FontItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/assets/fonts`, {
+      const res = await apiFetch(`${API_BASE}/admin/assets/fonts`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -1672,7 +1726,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     font: { name: string; fontFamily: string; googleFont?: string; previewText?: string }
   ): Promise<ApiResponse<FontItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/assets/fonts`, {
+      const res = await apiFetch(`${API_BASE}/admin/assets/fonts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1693,7 +1747,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deleteFont(token: string, id: string): Promise<ApiResponse<{ success: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/assets/fonts/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/assets/fonts/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1710,7 +1764,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getAdminStickers(token: string): Promise<ApiResponse<StickerItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/assets/stickers`, {
+      const res = await apiFetch(`${API_BASE}/admin/assets/stickers`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -1730,7 +1784,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     sticker: { name: string; category?: string; type: 'emoji' | 'image'; url: string }
   ): Promise<ApiResponse<StickerItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/assets/stickers`, {
+      const res = await apiFetch(`${API_BASE}/admin/assets/stickers`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1751,7 +1805,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deleteSticker(token: string, id: string): Promise<ApiResponse<{ success: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/assets/stickers/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/assets/stickers/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1769,7 +1823,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // 12. Auto-Sync & System Engine
   async getSyncStatus(): Promise<ApiResponse<SyncEngineStatus>> {
     try {
-      const res = await fetch(`${API_BASE}/system/sync-status`);
+      const res = await apiFetch(`${API_BASE}/system/sync-status`);
       const json = await res.json().catch(() => null);
       if (res.ok && json?.success && json?.data) {
         return json;
@@ -1796,7 +1850,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async triggerSyncNow(): Promise<ApiResponse<SyncTriggerResult>> {
     try {
-      const res = await fetch(`${API_BASE}/system/sync-trigger`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/system/sync-trigger`, { method: 'POST' });
       const json = await res.json().catch(() => null);
       if (res.ok && json) {
         return json;
@@ -1830,7 +1884,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getTimingConfig(): Promise<ApiResponse<SystemTimingConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/system/timing-config`);
+      const res = await apiFetch(`${API_BASE}/system/timing-config`);
       const json = await res.json().catch(() => null);
       if (res.ok && json?.success && json?.data) {
         return json;
@@ -1852,7 +1906,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updateTimingConfig(config: Partial<SystemTimingConfig>): Promise<ApiResponse<SystemTimingConfig & { message?: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/system/timing-config`, {
+      const res = await apiFetch(`${API_BASE}/system/timing-config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -1894,7 +1948,11 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     isPaperOut?: boolean;
   }>> {
     try {
-      const res = await fetch(`${API_BASE}/system/kiosk-status`);
+      const res = await apiFetch(`${API_BASE}/system/kiosk-status`, {
+        headers: {
+          'x-booth-key': BOOTH_KEY,
+        },
+      });
       if (res.ok) {
         return await res.json();
       }
@@ -1915,7 +1973,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async ackTestTrigger(id: string): Promise<ApiResponse<{ acknowledged: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/system/ack-test-trigger`, {
+      const res = await apiFetch(`${API_BASE}/system/ack-test-trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
@@ -1939,7 +1997,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token?: string
   ): Promise<ApiResponse<{ triggerId: string; virtualPrint: boolean; packageId?: string; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/kiosk/trigger-test-session`, {
+      const res = await apiFetch(`${API_BASE}/owner/kiosk/trigger-test-session`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1967,7 +2025,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async getOwnerTelemetry(token?: string): Promise<ApiResponse<OwnerTelemetry>> {
     const url = `${API_BASE}/owner/telemetry`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -1986,7 +2044,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async getOwnerSessionsToday(limit = 10, token?: string): Promise<ApiResponse<OwnerSessionToday[]>> {
     const url = `${API_BASE}/owner/sessions/today?limit=${limit}`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -2009,7 +2067,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token?: string
   ): Promise<ApiResponse<{ maintenanceMode: boolean; reason?: string; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/kiosk/lock`, {
+      const res = await apiFetch(`${API_BASE}/owner/kiosk/lock`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2030,7 +2088,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async ownerForceSync(token?: string): Promise<ApiResponse<{ processed: number; succeeded: number; failed: number; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/kiosk/force-sync`, {
+      const res = await apiFetch(`${API_BASE}/owner/kiosk/force-sync`, {
         method: 'POST',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -2047,7 +2105,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async ownerTriggerCleanup(token?: string): Promise<ApiResponse<{ deleted: number; freedBytes: number; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/kiosk/cleanup`, {
+      const res = await apiFetch(`${API_BASE}/owner/kiosk/cleanup`, {
         method: 'POST',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -2064,7 +2122,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async ownerResendEmail(sessionId: string, targetEmail?: string, token?: string): Promise<ApiResponse<{ sent: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/sessions/${encodeURIComponent(sessionId)}/resend-email`, {
+      const res = await apiFetch(`${API_BASE}/owner/sessions/${encodeURIComponent(sessionId)}/resend-email`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2085,7 +2143,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async ownerTestPrint(token?: string): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/kiosk/test-print`, {
+      const res = await apiFetch(`${API_BASE}/owner/kiosk/test-print`, {
         method: 'POST',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -2102,7 +2160,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getTunnelStatus(token?: string): Promise<ApiResponse<TunnelConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/tunnel-status`, {
+      const res = await apiFetch(`${API_BASE}/owner/tunnel-status`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       const json = await res.json().catch(() => null);
@@ -2126,7 +2184,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updateTunnelStatus(tunnelUrl: string, isActive?: boolean, token?: string): Promise<ApiResponse<TunnelConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/owner/tunnel-status`, {
+      const res = await apiFetch(`${API_BASE}/owner/tunnel-status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2157,7 +2215,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async getOwnerAccessCodes(status?: string, token?: string): Promise<ApiResponse<AccessCodeItem[]>> {
     const url = `${API_BASE}/owner/access-codes${status ? `?status=${encodeURIComponent(status)}` : ''}`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -2176,7 +2234,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async createOwnerAccessCode(req: CreateAccessCodeRequest, token?: string): Promise<ApiResponse<AccessCodeItem>> {
     const url = `${API_BASE}/owner/access-codes`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2200,7 +2258,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async revokeOwnerAccessCode(id: string, reason?: string, token?: string): Promise<ApiResponse<AccessCodeItem>> {
     const url = `${API_BASE}/owner/access-codes/${encodeURIComponent(id)}/revoke`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2223,7 +2281,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async redeemAccessCode(sessionId: string, code: string): Promise<ApiResponse<{ success: boolean; session: any; accessCode: AccessCodeItem }>> {
     try {
-      const res = await fetch(`${API_BASE}/access-codes/redeem`, {
+      const res = await apiFetch(`${API_BASE}/access-codes/redeem`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2248,7 +2306,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     requiredPrints?: number
   ): Promise<ApiResponse<{ success: boolean; session: any; accessCode: AccessCodeItem; extraPrints: number }>> {
     try {
-      const res = await fetch(`${API_BASE}/payments/redeem-extra-print-code`, {
+      const res = await apiFetch(`${API_BASE}/payments/redeem-extra-print-code`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2273,7 +2331,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async getOwnerVouchers(token?: string): Promise<ApiResponse<OwnerVoucherItem[]>> {
     const url = `${API_BASE}/owner/vouchers`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -2292,7 +2350,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async createOwnerVoucher(req: CreateVoucherRequest, token?: string): Promise<ApiResponse<OwnerVoucherItem>> {
     const url = `${API_BASE}/owner/vouchers`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2316,7 +2374,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async toggleOwnerVoucher(id: string, isActive: boolean, token?: string): Promise<ApiResponse<OwnerVoucherItem>> {
     const url = `${API_BASE}/owner/vouchers/${encodeURIComponent(id)}/toggle`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -2340,7 +2398,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async deleteOwnerVoucher(id: string, token?: string): Promise<ApiResponse<{ success: boolean }>> {
     const url = `${API_BASE}/owner/vouchers/${encodeURIComponent(id)}`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'DELETE',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -2380,7 +2438,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (filters?.page) queryParams.append('page', String(filters.page));
 
       const url = `${API_BASE}/owner/transactions?${queryParams.toString()}`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -2412,7 +2470,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (filters?.isTodayOnly !== undefined) queryParams.append('isTodayOnly', String(filters.isTodayOnly));
 
       const url = `${API_BASE}/owner/transactions/summary?${queryParams.toString()}`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -2447,7 +2505,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (filters?.search) queryParams.append('search', filters.search);
 
       const url = `${API_BASE}/owner/transactions/export/csv?${queryParams.toString()}`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {
@@ -2473,7 +2531,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.kioskId && params.kioskId !== 'ALL') q.append('kioskId', params.kioskId);
 
       const url = `${API_BASE}/owner/network-analytics?${q.toString()}`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -2493,7 +2551,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<import('../types/api').PartnerDrilldownDetails>> {
     try {
       const url = `${API_BASE}/owner/partners/${partnerId}/drilldown`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -2521,7 +2579,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.limit) q.append('limit', String(params.limit));
 
       const url = `${API_BASE}/owner/network-sessions?${q.toString()}`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -2542,7 +2600,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
       const url = `${API_BASE}/owner/operators/${operatorId}/reset-pin`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2569,7 +2627,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ success: boolean; cancelledSessionsCount: number; message: string }>> {
     try {
       const url = `${API_BASE}/owner/kiosks/${kioskId}/reset`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2596,7 +2654,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ success: boolean; disabledPackageIds: string[]; message: string }>> {
     try {
       const url = `${API_BASE}/owner/kiosks/${kioskId}/packages`;
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -2620,7 +2678,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // Integrations & Kiosk Identity Management
   async getAdminIntegrations(token: string): Promise<ApiResponse<import('../types/api').IntegrationConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/integrations`, {
+      const res = await apiFetch(`${API_BASE}/admin/integrations`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -2642,7 +2700,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token: string
   ): Promise<ApiResponse<import('../types/api').IntegrationConfig>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/integrations`, {
+      const res = await apiFetch(`${API_BASE}/admin/integrations`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -2669,7 +2727,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token: string
   ): Promise<ApiResponse<{ sent: boolean; messageId: string; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/integrations/test-email`, {
+      const res = await apiFetch(`${API_BASE}/admin/integrations/test-email`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2691,7 +2749,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token: string
   ): Promise<ApiResponse<{ success: boolean; message: string; isProduction: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/integrations/test-midtrans`, {
+      const res = await apiFetch(`${API_BASE}/admin/integrations/test-midtrans`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -2711,7 +2769,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token: string
   ): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/integrations/test-s3`, {
+      const res = await apiFetch(`${API_BASE}/admin/integrations/test-s3`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -2731,7 +2789,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   async getOwnerKiosks(token?: string): Promise<ApiResponse<KioskItem[]>> {
     const url = `${API_BASE}/owner/kiosks`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -2751,7 +2809,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<KioskItem>> {
     const url = `${API_BASE}/owner/kiosks`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2774,7 +2832,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<KioskItem>> {
     const url = `${API_BASE}/owner/kiosks/${encodeURIComponent(id)}`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -2798,7 +2856,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ id: string; code: string; isLocked: boolean; lockReason: string | null; status: KioskStatus }>> {
     const url = `${API_BASE}/owner/kiosks/${encodeURIComponent(id)}/lock`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2821,7 +2879,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ id: string; code: string; paperRemaining: number; paperRollCapacity: number }>> {
     const url = `${API_BASE}/owner/kiosks/${encodeURIComponent(id)}/refill-paper`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2843,7 +2901,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ id: string; code: string; apiKey: string }>> {
     const url = `${API_BASE}/owner/kiosks/${encodeURIComponent(id)}/rotate-key`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -2861,7 +2919,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   ): Promise<ApiResponse<{ success: boolean; message: string }>> {
     const url = `${API_BASE}/owner/kiosks/${encodeURIComponent(id)}`;
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'DELETE',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -2876,7 +2934,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // Kiosk License & Activation
   async getKioskActivationStatus(): Promise<ApiResponse<import('../types/api').KioskActivationStatus>> {
     try {
-      const res = await fetch(`${API_BASE}/kiosk/activation-status`);
+      const res = await apiFetch(`${API_BASE}/kiosk/activation-status`);
       if (res.ok) return await res.json();
       return errResponse('FETCH_FAILED', 'Gagal memuat status aktivasi booth');
     } catch {
@@ -2893,7 +2951,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async activateKiosk(apiKey: string): Promise<ApiResponse<{ success: boolean; message: string; kiosk: any }>> {
     try {
-      const res = await fetch(`${API_BASE}/kiosk/activate`, {
+      const res = await apiFetch(`${API_BASE}/kiosk/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey }),
@@ -2909,7 +2967,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // Super Admin Partner Management
   async getAdminPartners(token?: string): Promise<ApiResponse<import('../types/api').PartnerItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/partners`, {
+      const res = await apiFetch(`${API_BASE}/admin/partners`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -2924,7 +2982,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { name: string; email: string; password: string; phone?: string; revenueSharePct?: number }
   ): Promise<ApiResponse<import('../types/api').PartnerItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/partners`, {
+      const res = await apiFetch(`${API_BASE}/admin/partners`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2942,7 +3000,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async assignKioskToPartner(token: string | undefined, kioskId: string, partnerId: string | null): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/kiosks/${encodeURIComponent(kioskId)}/assign`, {
+      const res = await apiFetch(`${API_BASE}/admin/kiosks/${encodeURIComponent(kioskId)}/assign`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2964,7 +3022,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { name?: string; email?: string; password?: string; phone?: string; revenueSharePct?: number; receiptHeader?: string; receiptFooter?: string; isActive?: boolean }
   ): Promise<ApiResponse<import('../types/api').PartnerItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/partners/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/partners/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -2982,7 +3040,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deleteAdminPartner(token: string | undefined, id: string): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/partners/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/partners/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -3002,7 +3060,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { name?: string; location?: string; code?: string; paperRollCapacity?: number; partnerId?: string | null }
   ): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/kiosks/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/kiosks/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3020,7 +3078,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getKioskDetails(token: string | undefined, id: string): Promise<ApiResponse<import('../types/api').KioskDetailItem>> {
     try {
-      const res = await fetch(`${API_BASE}/admin/kiosks/${encodeURIComponent(id)}/details`, {
+      const res = await apiFetch(`${API_BASE}/admin/kiosks/${encodeURIComponent(id)}/details`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3033,7 +3091,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // Partner Portal (Mitra)
   async partnerLogin(email: string, pass: string): Promise<ApiResponse<{ token: string; partner: any }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/login`, {
+      const res = await apiFetch(`${API_BASE}/partner/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password: pass }),
@@ -3061,7 +3119,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     }
   ): Promise<ApiResponse<import('../types/api').PartnerItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/profile`, {
+      const res = await apiFetch(`${API_BASE}/partner/profile`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3083,7 +3141,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     token?: string
   ): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/auth/change-password`, {
+      const res = await apiFetch(`${API_BASE}/partner/auth/change-password`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3101,7 +3159,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPartnerPasses(token?: string, limit = 100): Promise<ApiResponse<import('../types/api').AccessCodeItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/passes?limit=${limit}`, {
+      const res = await apiFetch(`${API_BASE}/partner/passes?limit=${limit}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3116,7 +3174,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: import('../types/api').CreatePartnerPassRequest
   ): Promise<ApiResponse<import('../types/api').AccessCodeItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/passes`, {
+      const res = await apiFetch(`${API_BASE}/partner/passes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3134,7 +3192,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deletePartnerPass(token: string | undefined, passId: string): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/passes/${encodeURIComponent(passId)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/passes/${encodeURIComponent(passId)}`, {
         method: 'DELETE',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -3148,7 +3206,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async revokePartnerPass(token: string | undefined, passId: string, reason?: string): Promise<ApiResponse<{ success: boolean; message: string; status: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/passes/${encodeURIComponent(passId)}/revoke`, {
+      const res = await apiFetch(`${API_BASE}/partner/passes/${encodeURIComponent(passId)}/revoke`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3166,7 +3224,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async extendPartnerPass(token: string | undefined, passId: string, hours = 24): Promise<ApiResponse<{ success: boolean; message: string; expiresAt: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/passes/${encodeURIComponent(passId)}/extend`, {
+      const res = await apiFetch(`${API_BASE}/partner/passes/${encodeURIComponent(passId)}/extend`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3182,15 +3240,15 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     }
   }
 
-  async updatePartnerKioskPaper(token: string | undefined, kioskId: string, paperRemaining: number): Promise<ApiResponse<any>> {
+  async updatePartnerKioskPaper(token: string | undefined, kioskId: string, paperRemaining?: number, paperTrackingEnabled?: boolean): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/paper`, {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/paper`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ paperRemaining }),
+        body: JSON.stringify({ paperRemaining, paperTrackingEnabled }),
       });
       if (res.ok) return await res.json();
       const err = await res.json().catch(() => ({}));
@@ -3206,7 +3264,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { name?: string; location?: string; code?: string; paperRollCapacity?: number }
   ): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3224,7 +3282,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPartnerKioskDetails(token: string | undefined, kioskId: string): Promise<ApiResponse<import('../types/api').KioskDetailItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/details`, {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/details`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3236,7 +3294,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getMyKiosks(token?: string): Promise<ApiResponse<import('../types/api').KioskItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/my-kiosks`, {
+      const res = await apiFetch(`${API_BASE}/partner/my-kiosks`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3248,7 +3306,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPartnerOperators(token?: string): Promise<ApiResponse<import('../types/api').OperatorItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/operators`, {
+      const res = await apiFetch(`${API_BASE}/partner/operators`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3263,7 +3321,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { name: string; username: string; pin: string; kioskId?: string }
   ): Promise<ApiResponse<import('../types/api').OperatorItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/operators`, {
+      const res = await apiFetch(`${API_BASE}/partner/operators`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3285,7 +3343,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { name?: string; pin?: string; kioskId?: string | null; isActive?: boolean }
   ): Promise<ApiResponse<import('../types/api').OperatorItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/operators/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/operators/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3306,7 +3364,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     id: string
   ): Promise<ApiResponse<{ success: boolean; isSoftDeleted: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/operators/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/operators/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -3325,7 +3383,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       const query = new URLSearchParams();
       if (params?.startDate) query.append('startDate', params.startDate);
       if (params?.endDate) query.append('endDate', params.endDate);
-      const res = await fetch(`${API_BASE}/partner/analytics?${query.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/partner/analytics?${query.toString()}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3346,7 +3404,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.endDate) query.append('endDate', params.endDate);
       if (params?.kioskId) query.append('kioskId', params.kioskId);
 
-      const res = await fetch(`${API_BASE}/partner/financial-analytics?${query.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/partner/financial-analytics?${query.toString()}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3358,11 +3416,12 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPartnerTransactions(
     token: string | undefined,
-    params?: { kioskId?: string; startDate?: string; endDate?: string; status?: string; search?: string; page?: number; limit?: number }
+    params?: { kioskId?: string; startDate?: string; endDate?: string; period?: string; status?: string; search?: string; page?: number; limit?: number }
   ): Promise<ApiResponse<{ items: import('../types/api').PartnerTransactionItem[]; pagination: { total: number; page: number; limit: number; totalPages: number } }>> {
     try {
       const query = new URLSearchParams();
       if (params?.kioskId) query.append('kioskId', params.kioskId);
+      if (params?.period) query.append('period', params.period);
       if (params?.startDate) query.append('startDate', params.startDate);
       if (params?.endDate) query.append('endDate', params.endDate);
       if (params?.status) query.append('status', params.status);
@@ -3370,7 +3429,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.page) query.append('page', String(params.page));
       if (params?.limit) query.append('limit', String(params.limit));
 
-      const res = await fetch(`${API_BASE}/partner/transactions?${query.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/partner/transactions?${query.toString()}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3382,17 +3441,18 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async exportPartnerTransactionsCsv(
     token: string | undefined,
-    params?: { kioskId?: string; startDate?: string; endDate?: string; status?: string; search?: string }
+    params?: { kioskId?: string; startDate?: string; endDate?: string; period?: string; status?: string; search?: string }
   ): Promise<string> {
     try {
       const query = new URLSearchParams();
       if (params?.kioskId) query.append('kioskId', params.kioskId);
+      if (params?.period) query.append('period', params.period);
       if (params?.startDate) query.append('startDate', params.startDate);
       if (params?.endDate) query.append('endDate', params.endDate);
       if (params?.status) query.append('status', params.status);
       if (params?.search) query.append('search', params.search);
 
-      const res = await fetch(`${API_BASE}/partner/transactions/export-csv?${query.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/partner/transactions/export-csv?${query.toString()}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.text();
@@ -3416,7 +3476,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (params?.page) query.append('page', String(params.page));
       if (params?.limit) query.append('limit', String(params.limit));
 
-      const res = await fetch(`${API_BASE}/partner/sessions?${query.toString()}`, {
+      const res = await apiFetch(`${API_BASE}/partner/sessions?${query.toString()}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3428,7 +3488,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPartnerPackages(token: string | undefined): Promise<ApiResponse<{ packages: import('../types/api').PartnerPackageItem[]; kiosks: { id: string; code: string; name: string; disabledPackageIds: string[] }[] }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/packages`, {
+      const res = await apiFetch(`${API_BASE}/partner/packages`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3443,7 +3503,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: import('../types/api').CreatePartnerPackageRequest
   ): Promise<ApiResponse<import('../types/api').PartnerPackageItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/packages`, {
+      const res = await apiFetch(`${API_BASE}/partner/packages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3465,7 +3525,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: Partial<import('../types/api').CreatePartnerPackageRequest> & { isActive?: boolean }
   ): Promise<ApiResponse<import('../types/api').PartnerPackageItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/packages/${encodeURIComponent(packageId)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/packages/${encodeURIComponent(packageId)}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3486,7 +3546,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     packageId: string
   ): Promise<ApiResponse<{ success: boolean; message?: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/packages/${encodeURIComponent(packageId)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/packages/${encodeURIComponent(packageId)}`, {
         method: 'DELETE',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -3500,7 +3560,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updatePartnerKioskPackages(token: string | undefined, kioskId: string, disabledPackageIds: string[]): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/packages`, {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/packages`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -3518,7 +3578,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async remoteResetPartnerKiosk(token: string | undefined, kioskId: string): Promise<ApiResponse<{ success: boolean; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/reset`, {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/reset`, {
         method: 'POST',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -3530,9 +3590,23 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     }
   }
 
+  async remoteBypassPartnerKiosk(token: string | undefined, kioskId: string): Promise<ApiResponse<{ success: boolean; mode: string; sessionCode?: string; passCode?: string; message: string }>> {
+    try {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/bypass`, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (res.ok) return await res.json();
+      const err = await res.json().catch(() => ({}));
+      return errResponse('BYPASS_FAILED', err?.error?.message || 'Gagal mem-bypass booth');
+    } catch (e: any) {
+      return errResponse('NETWORK_ERROR', e?.message || 'Koneksi gagal');
+    }
+  }
+
   async remoteLockPartnerKiosk(token: string | undefined, kioskId: string, isLocked: boolean, reason?: string): Promise<ApiResponse<{ success: boolean; isLocked: boolean; lockReason?: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/lock`, {
+      const res = await apiFetch(`${API_BASE}/partner/kiosks/${encodeURIComponent(kioskId)}/lock`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3550,7 +3624,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getPartnerVouchers(token: string | undefined): Promise<ApiResponse<import('../types/api').PartnerVoucherItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/vouchers`, {
+      const res = await apiFetch(`${API_BASE}/partner/vouchers`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3562,7 +3636,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async createPartnerVoucher(token: string | undefined, data: import('../types/api').CreatePartnerVoucherRequest): Promise<ApiResponse<import('../types/api').PartnerVoucherItem>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/vouchers`, {
+      const res = await apiFetch(`${API_BASE}/partner/vouchers`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3580,7 +3654,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async togglePartnerVoucher(token: string | undefined, id: string): Promise<ApiResponse<{ id: string; code: string; isActive: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/vouchers/${encodeURIComponent(id)}/toggle`, {
+      const res = await apiFetch(`${API_BASE}/partner/vouchers/${encodeURIComponent(id)}/toggle`, {
         method: 'PATCH',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -3594,7 +3668,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async deletePartnerVoucher(token: string | undefined, id: string): Promise<ApiResponse<{ success: boolean }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/vouchers/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${API_BASE}/partner/vouchers/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -3610,7 +3684,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
   // Operator Field Desk
   async operatorLogin(username: string, pin: string): Promise<ApiResponse<{ token: string; operator: any }>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/login`, {
+      const res = await apiFetch(`${API_BASE}/operator/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, pin }),
@@ -3625,7 +3699,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getOperatorKioskStatus(token?: string): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/kiosk-status`, {
+      const res = await apiFetch(`${API_BASE}/operator/kiosk-status`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3640,7 +3714,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     data: { packageId?: string; amount?: number; type?: 'SESSION' | 'EXTRA_PRINT'; extraPrints?: number; customerNote?: string }
   ): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/generate-pass`, {
+      const res = await apiFetch(`${API_BASE}/operator/generate-pass`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3658,7 +3732,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getOperatorPasses(token?: string, limit = 50): Promise<ApiResponse<import('../types/api').AccessCodeItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/my-passes?limit=${limit}`, {
+      const res = await apiFetch(`${API_BASE}/operator/my-passes?limit=${limit}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3670,7 +3744,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updateOperatorPaper(token: string | undefined, paperRemaining: number): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/update-paper`, {
+      const res = await apiFetch(`${API_BASE}/operator/update-paper`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3688,7 +3762,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getOperatorRecentSessions(token?: string, limit = 10): Promise<ApiResponse<import('../types/api').RecentSessionItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/recent-sessions?limit=${limit}`, {
+      const res = await apiFetch(`${API_BASE}/operator/recent-sessions?limit=${limit}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3705,7 +3779,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     reason?: string
   ): Promise<ApiResponse<{ jobId: string; status: string; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/reprint-session`, {
+      const res = await apiFetch(`${API_BASE}/operator/reprint-session`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3723,7 +3797,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async partnerForceSync(token: string | undefined): Promise<ApiResponse<{ processed: number; succeeded: number; failed: number; message: string }>> {
     try {
-      const res = await fetch(`${API_BASE}/partner/sync`, {
+      const res = await apiFetch(`${API_BASE}/partner/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3740,7 +3814,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getOperatorShiftSummary(token?: string): Promise<ApiResponse<any>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/shift-summary`, {
+      const res = await apiFetch(`${API_BASE}/operator/shift-summary`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) return await res.json();
@@ -3752,7 +3826,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async getOperatorPackages(token?: string): Promise<ApiResponse<import('../types/package').PackageItem[]>> {
     try {
-      const res = await fetch(`${API_BASE}/operator/packages`, {
+      const res = await apiFetch(`${API_BASE}/operator/packages`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (res.ok) {

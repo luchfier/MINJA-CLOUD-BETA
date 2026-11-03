@@ -52,7 +52,6 @@ export async function buildCloudApp() {
 
   const app = Fastify({
     bodyLimit: 50 * 1024 * 1024,
-    disableRequestLogging: true,
     logger: false,
   });
 

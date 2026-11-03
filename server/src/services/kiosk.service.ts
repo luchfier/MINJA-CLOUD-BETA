@@ -32,6 +32,15 @@ export interface HeartbeatPayload {
   activeSessionId?: string;
 }
 
+export interface PendingPrintCommand {
+  id: string;
+  sessionId: string;
+  copies: number;
+  reason: string;
+  requestedBy: string;
+  createdAt: string;
+}
+
 export interface KioskItemDto {
   id: string;
   code: string;
@@ -41,6 +50,7 @@ export interface KioskItemDto {
   status: KioskStatus;
   paperRemaining: number;
   paperRollCapacity: number;
+  paperTrackingEnabled?: boolean;
   printerStatus: string | null;
   cameraStatus: string | null;
   isLocked: boolean;
@@ -55,6 +65,24 @@ export interface KioskItemDto {
 }
 
 export class KioskService {
+  // Antrean perintah cetak jarak jauh per booth (Remote Print Dispatch)
+  private static pendingPrintCommands = new Map<string, PendingPrintCommand[]>();
+
+  public static queuePrintCommand(kioskId: string, cmd: PendingPrintCommand): void {
+    const existing = KioskService.pendingPrintCommands.get(kioskId) || [];
+    existing.push(cmd);
+    KioskService.pendingPrintCommands.set(kioskId, existing);
+    humanLogger.info('REMOTE_PRINT_QUEUE', `Perintah cetak didaftarkan untuk booth ${kioskId}: Sesi ${cmd.sessionId} (${cmd.copies} lembar)`);
+  }
+
+  public static popPrintCommands(kioskId: string): PendingPrintCommand[] {
+    const cmds = KioskService.pendingPrintCommands.get(kioskId) || [];
+    if (cmds.length > 0) {
+      KioskService.pendingPrintCommands.delete(kioskId);
+    }
+    return cmds;
+  }
+
   constructor(private prisma: PrismaClient) {}
 
   /**
@@ -118,6 +146,7 @@ export class KioskService {
         status: effectiveStatus,
         paperRemaining: kiosk.paperRemaining,
         paperRollCapacity: kiosk.paperRollCapacity,
+        paperTrackingEnabled: Array.isArray(kiosk.disabledPackageIds) && kiosk.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
         printerStatus: kiosk.printerStatus,
         cameraStatus: kiosk.cameraStatus,
         isLocked: kiosk.isLocked,
@@ -183,6 +212,7 @@ export class KioskService {
       status: effectiveStatus,
       paperRemaining: kiosk.paperRemaining,
       paperRollCapacity: kiosk.paperRollCapacity,
+      paperTrackingEnabled: Array.isArray(kiosk.disabledPackageIds) && kiosk.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
       printerStatus: kiosk.printerStatus,
       cameraStatus: kiosk.cameraStatus,
       isLocked: kiosk.isLocked,
@@ -414,6 +444,8 @@ export class KioskService {
       },
     });
 
+    const pendingCommands = KioskService.popPrintCommands(kiosk.id);
+
     return {
       success: true,
       kioskId: updated.id,
@@ -421,6 +453,7 @@ export class KioskService {
       name: updated.name,
       isLocked: updated.isLocked,
       lockReason: updated.lockReason,
+      pendingPrintCommands: pendingCommands,
       serverTime: new Date().toISOString(),
     };
   }
@@ -459,6 +492,7 @@ export class KioskService {
           location: kiosk.location,
           status: kiosk.status,
           partnerName: kiosk.partner?.name || null,
+          apiKey: kiosk.apiKey,
         },
       };
     } catch {

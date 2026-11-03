@@ -25,7 +25,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: [requireBoothAuth] },
     async (request, reply) => {
       const body = createSessionSchema.parse(request.body);
-      const created = await sessionService.createSession(body);
+      const created = await sessionService.createSession(body, request.kioskId);
       sendSuccess(reply, created, 201);
     }
   );

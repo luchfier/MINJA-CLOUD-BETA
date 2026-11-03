@@ -92,6 +92,19 @@ export async function cleanupOldBrandingFile(
   }
 }
 
+function parseKioskTheme(customCss: string | null | undefined): Record<string, any> {
+  if (!customCss || typeof customCss !== 'string') return {};
+  try {
+    const trimmed = customCss.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      return JSON.parse(trimmed);
+    }
+  } catch (err) {
+    console.warn('[SettingsService] Gagal parse customCss JSON:', err);
+  }
+  return {};
+}
+
 export class SettingsService {
   constructor(private prisma: PrismaClient) {}
 
@@ -157,13 +170,17 @@ export class SettingsService {
 
     // Auto-migrasikan jika masih ada Base64 lama
     const activeSettings = await this.migrateLegacyBranding(settings);
+    const kioskTheme = parseKioskTheme(activeSettings.customCss);
 
     return {
       boothName: activeSettings.boothName,
       brandTitle: activeSettings.brandTitle,
+      tagline: activeSettings.brandTitle,
       welcomeText: activeSettings.welcomeText,
+      welcomeHeadline: activeSettings.welcomeText,
       primaryColor: activeSettings.primaryColor,
       secondaryColor: activeSettings.secondaryColor,
+      accentColor: activeSettings.secondaryColor,
       logoUrl: activeSettings.logoUrl,
       wallpaperUrl: activeSettings.wallpaperUrl,
       attractVideoUrl: activeSettings.attractVideoUrl,
@@ -182,6 +199,8 @@ export class SettingsService {
       pageBuilderLanding: activeSettings.pageBuilderLanding,
       pageBuilderGallery: activeSettings.pageBuilderGallery,
       customCss: activeSettings.customCss || '',
+      // Extended Kiosk Theme Configs
+      ...kioskTheme,
     };
   }
 
@@ -200,8 +219,15 @@ export class SettingsService {
 
     // Auto-migrasikan jika masih ada Base64 lama
     settings = await this.migrateLegacyBranding(settings);
+    const kioskTheme = parseKioskTheme(settings.customCss);
 
-    return settings;
+    return {
+      ...settings,
+      tagline: settings.brandTitle,
+      welcomeHeadline: settings.welcomeText,
+      accentColor: settings.secondaryColor,
+      ...kioskTheme,
+    };
   }
 
   /**
@@ -223,6 +249,17 @@ export class SettingsService {
 
     const sanitizedData: any = { ...data };
 
+    // Normalisasi sinonim field frontend
+    if (sanitizedData.tagline !== undefined && sanitizedData.brandTitle === undefined) {
+      sanitizedData.brandTitle = sanitizedData.tagline;
+    }
+    if (sanitizedData.welcomeHeadline !== undefined && sanitizedData.welcomeText === undefined) {
+      sanitizedData.welcomeText = sanitizedData.welcomeHeadline;
+    }
+    if (sanitizedData.accentColor !== undefined && sanitizedData.secondaryColor === undefined) {
+      sanitizedData.secondaryColor = sanitizedData.accentColor;
+    }
+
     // Ekstrak & simpan file logo jika dikirim sebagai Base64
     if (sanitizedData.logoUrl !== undefined) {
       const newLogoUrl = await persistBrandingFile(sanitizedData.logoUrl, 'logo');
@@ -241,9 +278,74 @@ export class SettingsService {
       sanitizedData.wallpaperUrl = newWallpaperUrl ?? null;
     }
 
+    // Kumpulkan seluruh konfigurasi visual/audio kiosk yang diperluas
+    const existingKioskTheme = parseKioskTheme(settings.customCss);
+    const updatedKioskTheme = {
+      ...existingKioskTheme,
+      ...(sanitizedData.welcomeSubheadline !== undefined && { welcomeSubheadline: sanitizedData.welcomeSubheadline }),
+      ...(sanitizedData.startSessionButtonText !== undefined && { startSessionButtonText: sanitizedData.startSessionButtonText }),
+      ...(sanitizedData.darkSurfaceColor !== undefined && { darkSurfaceColor: sanitizedData.darkSurfaceColor }),
+      ...(sanitizedData.backgroundBlur !== undefined && { backgroundBlur: sanitizedData.backgroundBlur }),
+      ...(sanitizedData.backgroundOverlayOpacity !== undefined && { backgroundOverlayOpacity: sanitizedData.backgroundOverlayOpacity }),
+      ...(sanitizedData.backgroundFit !== undefined && { backgroundFit: sanitizedData.backgroundFit }),
+      ...(sanitizedData.backgroundOpacity !== undefined && { backgroundOpacity: sanitizedData.backgroundOpacity }),
+      ...(sanitizedData.logoHeight !== undefined && { logoHeight: sanitizedData.logoHeight }),
+      ...(sanitizedData.glassmorphismIntensity !== undefined && { glassmorphismIntensity: sanitizedData.glassmorphismIntensity }),
+      ...(sanitizedData.enableVignette !== undefined && { enableVignette: sanitizedData.enableVignette }),
+      ...(sanitizedData.footerFeature1 !== undefined && { footerFeature1: sanitizedData.footerFeature1 }),
+      ...(sanitizedData.footerFeature2 !== undefined && { footerFeature2: sanitizedData.footerFeature2 }),
+      ...(sanitizedData.footerFeature3 !== undefined && { footerFeature3: sanitizedData.footerFeature3 }),
+      ...(sanitizedData.footerTouchPrompt !== undefined && { footerTouchPrompt: sanitizedData.footerTouchPrompt }),
+      ...(sanitizedData.welcomeAnimationType !== undefined && { welcomeAnimationType: sanitizedData.welcomeAnimationType }),
+      ...(sanitizedData.welcomeMusicEnabled !== undefined && { welcomeMusicEnabled: sanitizedData.welcomeMusicEnabled }),
+      ...(sanitizedData.welcomeMusicVolume !== undefined && { welcomeMusicVolume: sanitizedData.welcomeMusicVolume }),
+      ...(sanitizedData.welcomeMusicPreset !== undefined && { welcomeMusicPreset: sanitizedData.welcomeMusicPreset }),
+      ...(sanitizedData.welcomeMusicCustomUrl !== undefined && { welcomeMusicCustomUrl: sanitizedData.welcomeMusicCustomUrl }),
+    };
+
+    // Filter agar HANYA kolom prisma resmi yang dimasukkan ke query prisma.settings.update
+    const validPrismaColumns = new Set([
+      'boothName',
+      'brandTitle',
+      'welcomeText',
+      'primaryColor',
+      'secondaryColor',
+      'logoUrl',
+      'wallpaperUrl',
+      'attractVideoUrl',
+      'whatsappNumber',
+      'instagramHandle',
+      'studioAddress',
+      'promoHeadline',
+      'promoSubheadline',
+      'eventPackages',
+      'pageBuilderLanding',
+      'pageBuilderGallery',
+      'customCss',
+      'retentionHours',
+      'maxSessionTimeoutSeconds',
+      'paymentTimeoutSeconds',
+      'autoResetSeconds',
+      'maintenanceMode',
+      'emailDeliveryEnabled',
+      'galleryEnabled',
+      'livePhotoEnabled',
+      'selectedCameraId',
+      'selectedPrinterName',
+    ]);
+
+    const prismaData: Record<string, any> = {};
+    for (const key of Object.keys(sanitizedData)) {
+      if (validPrismaColumns.has(key)) {
+        prismaData[key] = sanitizedData[key];
+      }
+    }
+    // Simpan serialisasi JSON kiosk theme ke customCss
+    prismaData.customCss = JSON.stringify(updatedKioskTheme);
+
     const updated = await this.prisma.settings.update({
       where: { id: settings.id },
-      data: sanitizedData,
+      data: prismaData,
     });
 
     await logAuditEvent(this.prisma, {
@@ -253,6 +355,12 @@ export class SettingsService {
       details: { changedFields: Object.keys(data) },
     });
 
-    return updated;
+    return {
+      ...updated,
+      tagline: updated.brandTitle,
+      welcomeHeadline: updated.welcomeText,
+      accentColor: updated.secondaryColor,
+      ...updatedKioskTheme,
+    };
   }
 }

@@ -9,7 +9,7 @@ describe('Access Codes & Voucher Management API Suite', () => {
   let createdCodeId: string;
   let createdRawCode: string;
   let createdVoucherId: string;
-  const boothKey = process.env['BOOTH_API_KEY'] || 'minja_kiosk_secret_2026';
+  const boothKey = 'test-booth-key';
 
   beforeAll(async () => {
     app = await buildApp();
@@ -180,6 +180,101 @@ describe('Access Codes & Voucher Management API Suite', () => {
       expect(body.success).toBe(true);
       expect(body.data.status).toBe('REVOKED');
     });
+
+    it('POST /api/payments/redeem-access-code enforces cross-kiosk isolation (rejects code on wrong kiosk)', async () => {
+      // 1. Buat Kiosk A dan Kiosk B di database dengan API key masing-masing
+      const kioskA = await (app as any).prisma.kiosk.create({
+        data: {
+          code: `MJA-KA-CLOUD-${Date.now()}`,
+          name: 'Booth Cloud A',
+          location: 'Mall A Lantai 1',
+          apiKey: `mja_cloud_key_a_${Date.now()}`,
+        },
+      });
+
+      const kioskB = await (app as any).prisma.kiosk.create({
+        data: {
+          code: `MJA-KB-CLOUD-${Date.now()}`,
+          name: 'Booth Cloud B',
+          location: 'Mall B Lantai 2',
+          apiKey: `mja_cloud_key_b_${Date.now()}`,
+        },
+      });
+
+      try {
+        // 2. Admin generate PASS code KHUSUS untuk Kiosk A
+        const passRes = await app.inject({
+          method: 'POST',
+          url: '/api/owner/access-codes',
+          headers: { authorization: `Bearer ${ownerToken}` },
+          payload: {
+            packageId: testPackageId,
+            kioskId: kioskA.id,
+            cashierName: 'Kasir Cloud A',
+          },
+        });
+        expect(passRes.statusCode).toBe(201);
+        const passData = JSON.parse(passRes.body).data;
+        const passCodeA = passData.code;
+
+        // 3. Buat sesi di Kiosk B (mesin yang salah)
+        const sessionBRes = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          headers: { 'x-booth-key': kioskB.apiKey },
+          payload: { packageId: testPackageId },
+        });
+        const sessionBId = JSON.parse(sessionBRes.body).data.id;
+
+        // 4. Coba tebus kode Kiosk A di Kiosk B -> WAJIB DITOLAK (403 FORBIDDEN)!
+        const wrongRedeemRes = await app.inject({
+          method: 'POST',
+          url: '/api/payments/redeem-access-code',
+          headers: { 'x-booth-key': kioskB.apiKey },
+          payload: {
+            sessionId: sessionBId,
+            code: passCodeA,
+          },
+        });
+
+        expect(wrongRedeemRes.statusCode).toBe(403);
+        const wrongBody = JSON.parse(wrongRedeemRes.body);
+        expect(wrongBody.success).toBe(false);
+        expect(wrongBody.error.message).toContain('hanya berlaku untuk');
+
+        // 5. Buat sesi di Kiosk A (mesin yang benar)
+        const sessionARes = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          headers: { 'x-booth-key': kioskA.apiKey },
+          payload: { packageId: testPackageId },
+        });
+        const sessionAId = JSON.parse(sessionARes.body).data.id;
+
+        // 6. Tebus kode Kiosk A di Kiosk A -> WAJIB BERHASIL (200 OK)!
+        const correctRedeemRes = await app.inject({
+          method: 'POST',
+          url: '/api/payments/redeem-access-code',
+          headers: { 'x-booth-key': kioskA.apiKey },
+          payload: {
+            sessionId: sessionAId,
+            code: passCodeA,
+          },
+        });
+
+        expect(correctRedeemRes.statusCode).toBe(200);
+        const correctBody = JSON.parse(correctRedeemRes.body);
+        expect(correctBody.success).toBe(true);
+        expect(correctBody.data.session.state).toBe('PAYMENT_CONFIRMED');
+
+        // Cleanup sesi & payments
+        await (app as any).prisma.payment.deleteMany({ where: { sessionId: { in: [sessionAId, sessionBId] } } });
+        await (app as any).prisma.session.deleteMany({ where: { id: { in: [sessionAId, sessionBId] } } });
+        await (app as any).prisma.accessCode.deleteMany({ where: { id: passData.id } });
+      } finally {
+        await (app as any).prisma.kiosk.deleteMany({ where: { id: { in: [kioskA.id, kioskB.id] } } });
+      }
+    }, 20000);
   });
 
   describe('2. Owner Voucher Management Endpoints (/api/owner/vouchers)', () => {

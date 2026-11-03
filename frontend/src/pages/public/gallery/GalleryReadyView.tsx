@@ -41,13 +41,119 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
   const [zoomPhotoUrl, setZoomPhotoUrl] = useState<string | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
 
-  // Filter items
-  const frameItems = items.filter((i) => i.fileType === 'layout_4r');
-  const rawPhotos = items.filter((i) => i.fileType === 'raw_photo');
-  const videoItems = items.filter((i) => i.fileType === 'live_video');
+  // Dynamic gallery items & realtime universal listener (Universal Live-Sync)
+  const [currentItems, setCurrentItems] = useState<GalleryItem[]>(items);
+  const [isVideoChecking, setIsVideoChecking] = useState<boolean>(
+    !items.some((i) => i.fileType === 'live_video' || i.url?.endsWith('.mp4'))
+  );
+
+  useEffect(() => {
+    setCurrentItems(items);
+    if (items.some((i) => i.fileType === 'live_video' || i.url?.endsWith('.mp4'))) {
+      setIsVideoChecking(false);
+    }
+  }, [items]);
+
+  const [selectedVideoIndex, setSelectedVideoIndex] = useState<number>(0);
+
+  // Filter & sort items
+  const frameItems = currentItems.filter((i) => i.fileType === 'layout_4r');
+  const rawPhotos = currentItems.filter((i) => i.fileType === 'raw_photo');
+  const videoItems = useMemo(() => {
+    const vList = currentItems.filter((i) => i.fileType === 'live_video' || i.url?.endsWith('.mp4'));
+    return [...vList].sort((a, b) => {
+      const aName = (a.fileName || a.url).toLowerCase();
+      const bName = (b.fileName || b.url).toLowerCase();
+      const aIsSlide = aName.includes('slideshow');
+      const bIsSlide = bName.includes('slideshow');
+      if (aIsSlide && !bIsSlide) return -1;
+      if (!aIsSlide && bIsSlide) return 1;
+      return aName.localeCompare(bName);
+    });
+  }, [currentItems]);
+
+  const activeVideo = useMemo(() => {
+    if (videoItems.length === 0) return null;
+    if (selectedVideoIndex >= 0 && selectedVideoIndex < videoItems.length) {
+      return videoItems[selectedVideoIndex];
+    }
+    return videoItems[0];
+  }, [videoItems, selectedVideoIndex]);
+
+  const getVideoLabel = (item: GalleryItem, index: number): string => {
+    const name = (item.fileName || item.url).toLowerCase();
+    if (name.includes('slideshow')) {
+      return '🎬 Video Slideshow';
+    }
+    const match = name.match(/(?:layout_live|live_frame|live)[-_]?(\d+)/i);
+    if (match && match[1]) {
+      return `🎞️ Live Desain #${match[1]}`;
+    }
+    return `🎞️ Live Desain #${index + 1}`;
+  };
+
+  // Universal Live-Sync Poller: Memantau dan memperbarui foto, bingkai, dan video secara realtime
+  useEffect(() => {
+    let isMounted = true;
+    let pollCount = 0;
+    let consecutiveStablePolls = 0;
+    const maxPolls = 30; // 30 x 2.5s = ~75 detik toleransi waktu upload booth
+
+    const poller = setInterval(async () => {
+      pollCount++;
+      try {
+        const qToken = token ? `?token=${encodeURIComponent(token)}` : '';
+        const res = await fetch(`/api/public/gallery/${encodeURIComponent(sessionId)}/status${qToken}`);
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+
+        if (data?.success && data?.data?.items && isMounted) {
+          const freshItems: GalleryItem[] = data.data.items;
+          const freshVideos = freshItems.filter((i) => i.fileType === 'live_video' || i.url?.endsWith('.mp4'));
+
+          // Jika video ditemukan, matikan loader video
+          if (freshVideos.length > 0) {
+            setIsVideoChecking(false);
+          }
+
+          // Universal Live-Sync: Jika ada file baru mendarat (foto raw bertambah, frame bertambah, atau video mendarat)
+          setCurrentItems((prevItems) => {
+            const isCountChanged = freshItems.length !== prevItems.length;
+            const isUrlChanged = freshItems.some((f, idx) => prevItems[idx]?.url !== f.url);
+
+            if (isCountChanged || isUrlChanged) {
+              consecutiveStablePolls = 0;
+              return freshItems;
+            } else {
+              consecutiveStablePolls++;
+              return prevItems;
+            }
+          });
+
+          // Optimasi hemat daya & bandwidth:
+          // Jika video sudah ada DAN jumlah item sudah stabil tanpa perubahan selama 4 kali polling (~10 detik)
+          if (freshVideos.length > 0 && consecutiveStablePolls >= 4) {
+            clearInterval(poller);
+            return;
+          }
+        }
+      } catch {}
+
+      // Jika batas toleransi waktu telah habis, hentikan poller
+      if (pollCount >= maxPolls && isMounted) {
+        setIsVideoChecking(false);
+        clearInterval(poller);
+      }
+    }, 2500);
+
+    return () => {
+      isMounted = false;
+      clearInterval(poller);
+    };
+  }, [sessionId, token]);
 
   // Daftar frame aktif riil (fallback ke item pertama jika belum terklasifikasi)
-  const displayFrames = frameItems.length > 0 ? frameItems : (items.length > 0 ? [items[0]] : []);
+  const displayFrames = frameItems.length > 0 ? frameItems : (currentItems.length > 0 ? [currentItems[0]] : []);
   const isMultiFrame = displayFrames.length > 1;
 
   // Countdown mundur realtime 48 jam (berdetik setiap 1 detik)
@@ -142,9 +248,16 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
   };
 
   const handleSaveLiveVideo = () => {
-    const videoItem = videoItems[0] || items.find((i) => i.url.endsWith('.mp4'));
-    if (videoItem) {
-      triggerDownload(videoItem.url, `Minja_Live_Motion_${sessionId}.mp4`);
+    const videoToSave = activeVideo || videoItems[0] || currentItems.find((i) => i.url.endsWith('.mp4'));
+    if (videoToSave) {
+      const name = (videoToSave.fileName || videoToSave.url).toLowerCase();
+      const isSlideshow = name.includes('slideshow');
+      const match = name.match(/(?:layout_live|live_frame|live)[-_]?(\d+)/i);
+      const frameNum = match && match[1] ? match[1] : `${selectedVideoIndex + 1}`;
+      const customName = isSlideshow
+        ? `Minja_Slideshow_${sessionId}.mp4`
+        : `Minja_Live_Desain_${frameNum}_${sessionId}.mp4`;
+      triggerDownload(videoToSave.url, customName);
     }
   };
 
@@ -323,7 +436,7 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                     className="w-full overflow-x-auto no-scrollbar flex snap-x snap-mandatory scroll-smooth py-1 px-1 gap-4 items-center"
                   >
                     {displayFrames.map((frame, idx) => (
-                      <div key={idx} className="snap-center shrink-0 w-full flex justify-center py-1" data-strip-index={idx}>
+                      <div key={frame.url || idx} className="snap-center shrink-0 w-full flex justify-center py-1 animate-in fade-in duration-300" data-strip-index={idx}>
                         <div
                           onClick={() => setZoomPhotoUrl(frame.url)}
                           className="relative cursor-pointer group transition-transform duration-200 active:scale-[0.99] flex justify-center"
@@ -440,7 +553,7 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                 </div>
               ) : (
                 rawPhotos.map((photo, pIdx) => (
-                  <div key={pIdx} className="flex flex-col bg-[#f4f2fd] rounded-xl p-2 shadow-sm border border-zinc-200/60">
+                  <div key={photo.url || pIdx} className="flex flex-col bg-[#f4f2fd] rounded-xl p-2 shadow-sm border border-zinc-200/60 animate-in fade-in duration-300">
                     <div
                       onClick={() => setZoomPhotoUrl(photo.url)}
                       className="relative w-full aspect-[3/2] rounded-lg overflow-hidden bg-white cursor-pointer group"
@@ -478,27 +591,55 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                 <span className="text-[14px] font-bold text-[#1a1b22]">Video Momen Pilihan</span>
               </div>
               <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-[#e1e0ff] text-[#07006c] font-semibold font-['JetBrains_Mono'] tracking-wide">
-                Video Klip
+                {videoItems.length > 1 ? `${videoItems.length} Video Klip` : 'Video Klip'}
               </span>
             </div>
             <div className="w-full bg-[#f4f2fd] rounded-2xl p-4 shadow-sm flex flex-col border border-zinc-200/60">
-              {videoItems[0] ? (
+              {activeVideo ? (
                 <>
+                  {/* Multi-Video Selector (Jika ada Slideshow & Live Frame Multi-Desain) */}
+                  {videoItems.length > 1 && (
+                    <div className="w-full flex items-center gap-1.5 p-1 bg-[#eeedf7] rounded-xl mb-3.5 overflow-x-auto no-scrollbar">
+                      {videoItems.map((vItem, vIdx) => {
+                        const isSelected = activeVideo.url === vItem.url;
+                        return (
+                          <button
+                            key={vItem.url || vIdx}
+                            type="button"
+                            onClick={() => setSelectedVideoIndex(vIdx)}
+                            className={`flex-1 py-1.5 px-2.5 rounded-lg text-[12px] font-semibold tracking-tight transition-all duration-150 whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
+                              isSelected
+                                ? 'bg-white text-[#1a1b22] shadow-xs'
+                                : 'text-[#47464b] hover:text-[#1a1b22]'
+                            }`}
+                          >
+                            <span>{getVideoLabel(vItem, vIdx)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <div className="relative w-full aspect-[9/16] max-h-[360px] rounded-xl overflow-hidden bg-black mx-auto flex items-center justify-center shadow-inner group">
                     <video
-                      src={videoItems[0].url}
+                      key={activeVideo.url}
+                      src={activeVideo.url}
                       controls
                       playsInline
                       className="absolute inset-0 w-full h-full object-cover"
                     />
                     <div className="absolute top-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur px-2 py-0.5 rounded-full text-white pointer-events-none">
                       <span className="material-symbols-outlined text-[12px]">hd</span>
-                      <span className="text-[10px] font-bold font-['JetBrains_Mono']">HD</span>
+                      <span className="text-[10px] font-bold font-['JetBrains_Mono']">
+                        {activeVideo.fileName?.toLowerCase().includes('slideshow') ? 'SLIDESHOW' : 'LIVE'}
+                      </span>
                     </div>
                   </div>
                   <div className="flex flex-col mt-3.5 px-0.5">
                     <p className="text-[12px] text-[#47464b] leading-relaxed mb-3">
-                      Dilengkapi musik latar santai dan audio rana kamera, pas untuk diunggah langsung ke Instagram Reels, TikTok, atau WhatsApp Story.
+                      {activeVideo.fileName?.toLowerCase().includes('slideshow')
+                        ? 'Video kompilasi dari semua pose studio dengan ritme musik beat-cut ceria, siap untuk Instagram Reels, TikTok, atau WhatsApp Story.'
+                        : 'Video Live Photo sinkron yang bergerak di dalam bingkai cetak studio pilihanmu.'}
                     </p>
                     <button
                       type="button"
@@ -506,10 +647,24 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                       className="w-full h-11 rounded-xl bg-white hover:bg-zinc-50 border border-zinc-200/80 flex items-center justify-center gap-2 text-[#1a1b22] active:scale-95 transition-transform duration-100 text-[13px] font-semibold cursor-pointer shadow-2xs"
                     >
                       <span className="material-symbols-outlined text-[18px]">download</span>
-                      <span>Download</span>
+                      <span>
+                        {activeVideo.fileName?.toLowerCase().includes('slideshow')
+                          ? 'Download Video Slideshow'
+                          : `Download ${getVideoLabel(activeVideo, selectedVideoIndex).replace(/^[^\w]+/, '')}`}
+                      </span>
                     </button>
                   </div>
                 </>
+              ) : isVideoChecking ? (
+                <div className="w-full py-10 px-4 flex flex-col items-center justify-center text-center bg-zinc-50/80 rounded-2xl border border-zinc-200/60">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 mb-3 animate-pulse">
+                    <span className="material-symbols-outlined text-[24px]">hourglass_top</span>
+                  </div>
+                  <h4 className="text-[14px] font-bold text-zinc-900 mb-1">Video Sedang Disiapkan ⏳</h4>
+                  <p className="text-[12px] text-zinc-500 max-w-[280px] leading-relaxed">
+                    Klip momen dan slideshow sedang diproses dari booth. Pemutar video akan otomatis aktif di sini begitu selesai.
+                  </p>
+                </div>
               ) : (
                 <div className="w-full py-12 flex flex-col items-center justify-center text-center">
                   <span className="material-symbols-outlined text-[36px] text-zinc-400 mb-2">videocam_off</span>

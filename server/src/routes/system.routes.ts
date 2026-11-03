@@ -62,23 +62,30 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
    * GET /api/system/kiosk-status
    * Status publik ringan untuk layar kiosk (status maintenance, nama booth, sinyal remote test trigger, dan sisa kertas printer)
    */
-  app.get('/api/system/kiosk-status', async (_request, reply) => {
+  app.get('/api/system/kiosk-status', async (request, reply) => {
     const settings = await prisma.settings.findFirst();
     const isMaintenance = Boolean(settings?.maintenanceMode);
     const pendingTestTrigger = OwnerService.getPendingTestTrigger();
 
     let paperRemaining = 400;
     let paperRollCapacity = 400;
+    let isPaperTrackingEnabled = false;
     try {
-      const apiKey = process.env['BOOTH_API_KEY'];
+      const apiKey =
+        (request.headers['x-booth-key'] as string) ||
+        (request.headers['x-api-key'] as string) ||
+        (request.query as Record<string, string>)?.['apiKey'] ||
+        process.env['BOOTH_API_KEY'];
       if (apiKey) {
         const kiosk = await prisma.kiosk.findFirst({
           where: { apiKey },
-          select: { paperRemaining: true, paperRollCapacity: true },
+          select: { paperRemaining: true, paperRollCapacity: true, disabledPackageIds: true },
         });
         if (kiosk) {
           paperRemaining = kiosk.paperRemaining;
           paperRollCapacity = kiosk.paperRollCapacity;
+          isPaperTrackingEnabled = Array.isArray(kiosk.disabledPackageIds) &&
+            kiosk.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__');
         }
       }
     } catch {
@@ -93,8 +100,9 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
       pendingTestTrigger,
       paperRemaining,
       paperRollCapacity,
-      isPaperLow: paperRemaining <= 30,
-      isPaperOut: paperRemaining <= 0,
+      paperTrackingEnabled: isPaperTrackingEnabled,
+      isPaperLow: isPaperTrackingEnabled ? paperRemaining <= 30 : false,
+      isPaperOut: isPaperTrackingEnabled ? paperRemaining <= 0 : false,
     });
   });
 

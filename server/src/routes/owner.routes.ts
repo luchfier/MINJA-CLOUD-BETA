@@ -234,6 +234,8 @@ export const ownerRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         customerNote: z.string().max(200).optional().nullable(),
         cashierName: z.string().max(50).optional(),
         expiresInHours: z.number().int().min(1).max(720).optional(),
+        kioskId: z.string().optional().nullable(),
+        partnerId: z.string().optional().nullable(),
       });
       const parsed = schema.parse(req.body);
       const created = await accessCodeService.createAccessCode(parsed);

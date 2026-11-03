@@ -120,7 +120,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
         code: z.string().min(1),
       });
       const { sessionId, code } = schema.parse(request.body);
-      const result = await accessCodeService.redeemAccessCode(sessionId, code);
+      const result = await accessCodeService.redeemAccessCode(sessionId, code, request.kiosk);
       sendSuccess(reply, result);
     }
   );
@@ -134,7 +134,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
         code: z.string().min(1),
       });
       const { sessionId, code } = schema.parse(request.body);
-      const result = await accessCodeService.redeemAccessCode(sessionId, code);
+      const result = await accessCodeService.redeemAccessCode(sessionId, code, request.kiosk);
       sendSuccess(reply, result);
     }
   );
@@ -156,7 +156,8 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
       const result = await accessCodeService.redeemExtraPrintAccessCode(
         sessionId,
         code,
-        requiredPrints
+        requiredPrints,
+        request.kiosk
       );
       sendSuccess(reply, result);
     }

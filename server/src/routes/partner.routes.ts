@@ -41,7 +41,7 @@ const updatePartnerSchema = z.object({
 const createPartnerPassSchema = z.object({
   packageId: z.string().nullable().optional(),
   type: z.enum(['SESSION', 'EXTRA_PRINT']).default('SESSION'),
-  extraPrints: z.number().int().min(1).max(20).optional(),
+  extraPrints: z.number().int().min(0).max(20).optional().default(0),
   kioskId: z.string().nullable().optional(),
   amount: z.number().int().min(0).optional(),
   customerNote: z.string().optional(),
@@ -258,6 +258,7 @@ export async function partnerRoutes(app: FastifyInstance): Promise<void> {
       kioskId?: string;
       startDate?: string;
       endDate?: string;
+      period?: string;
       status?: string;
       search?: string;
       page?: string;
@@ -268,6 +269,7 @@ export async function partnerRoutes(app: FastifyInstance): Promise<void> {
       kioskId: query.kioskId,
       startDate: query.startDate,
       endDate: query.endDate,
+      period: query.period,
       status: query.status,
       search: query.search,
       page: query.page ? parseInt(query.page, 10) : 1,
@@ -286,6 +288,7 @@ export async function partnerRoutes(app: FastifyInstance): Promise<void> {
       kioskId?: string;
       startDate?: string;
       endDate?: string;
+      period?: string;
       status?: string;
       search?: string;
     };
@@ -387,6 +390,18 @@ export async function partnerRoutes(app: FastifyInstance): Promise<void> {
     const partnerId = request.partnerId!;
     const params = request.params as { id: string };
     const result = await partnerService.remoteResetKiosk(partnerId, params.id);
+    sendSuccess(reply, result);
+  });
+
+  /**
+   * POST /api/partner/kiosks/:id/bypass
+   * Bypass jarak jauh booth pilihan mitra:
+   * Meloloskan pembayaran sesi aktif langsung ke kamera atau membuatkan PASS bypass instan khusus booth ini
+   */
+  app.post('/api/partner/kiosks/:id/bypass', { preHandler: [requirePartnerAuth] }, async (request, reply) => {
+    const partnerId = request.partnerId!;
+    const params = request.params as { id: string };
+    const result = await partnerService.remoteBypassKiosk(partnerId, params.id);
     sendSuccess(reply, result);
   });
 
@@ -526,16 +541,21 @@ export async function partnerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * POST /api/partner/kiosks/:id/paper
-   * Mitra: Penyesuaian manual sisa kertas booth
+   * POST /api/partner/kiosks/:id/paper & PUT /api/partner/kiosks/:id/paper
+   * Mitra: Penyesuaian manual sisa kertas booth & toggle opsi pelacakan kertas
    */
-  app.post('/api/partner/kiosks/:id/paper', { preHandler: [requirePartnerAuth] }, async (request, reply) => {
+  const handleUpdateKioskPaper = async (request: any, reply: any) => {
     const partnerId = request.partnerId!;
     const params = request.params as { id: string };
-    const body = z.object({ paperRemaining: z.number().int().min(0).max(2000) }).parse(request.body);
-    const result = await partnerService.updateKioskPaper(partnerId, params.id, body.paperRemaining);
+    const body = z.object({
+      paperRemaining: z.number().int().min(0).max(2000).optional(),
+      paperTrackingEnabled: z.boolean().optional(),
+    }).parse(request.body);
+    const result = await partnerService.updateKioskPaper(partnerId, params.id, body);
     sendSuccess(reply, result);
-  });
+  };
+  app.post('/api/partner/kiosks/:id/paper', { preHandler: [requirePartnerAuth] }, handleUpdateKioskPaper);
+  app.put('/api/partner/kiosks/:id/paper', { preHandler: [requirePartnerAuth] }, handleUpdateKioskPaper);
 
   /**
    * PATCH /api/partner/kiosks/:id

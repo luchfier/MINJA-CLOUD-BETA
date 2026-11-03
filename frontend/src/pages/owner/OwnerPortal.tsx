@@ -42,6 +42,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { photoboothApi } from '../../services/photoboothApi';
+import { isJwtExpired } from '../../services/httpPhotoboothApi';
 import { FleetTab } from './tabs/FleetTab';
 import { SessionsTab } from './tabs/SessionsTab';
 import { TransactionsTab } from './tabs/TransactionsTab';
@@ -68,7 +69,7 @@ export const OwnerPortal: React.FC = () => {
   // ==========================================
   const [token, setToken] = useState<string | null>(() => {
     const saved = localStorage.getItem('minja_owner_token');
-    if (saved && saved.split('.').length === 3) {
+    if (saved && saved.split('.').length === 3 && !isJwtExpired(saved)) {
       return saved;
     }
     localStorage.removeItem('minja_owner_token');
@@ -152,7 +153,7 @@ export const OwnerPortal: React.FC = () => {
   const { isInstallable, triggerInstall } = usePwaInstall();
   const [isExecutiveModalOpen, setIsExecutiveModalOpen] = useState(false);
 
-  // Tangkap event 401 Unauthorized secara terpusat untuk cegah spam polling saat token expired
+  // Tangkap event 401 Unauthorized secara terpusat & watchdog kedaluwarsa JWT proaktif
   useEffect(() => {
     const handleUnauthorized = () => {
       localStorage.removeItem('minja_owner_token');
@@ -160,8 +161,25 @@ export const OwnerPortal: React.FC = () => {
       setPinInput('');
       setPinError('Sesi login telah kedaluwarsa. Silakan masukkan PIN kembali.');
     };
+
     window.addEventListener('minja:unauthorized', handleUnauthorized);
-    return () => window.removeEventListener('minja:unauthorized', handleUnauthorized);
+
+    // Watchdog proaktif: periksa token setiap 30 detik atau saat tab dibuka kembali
+    const checkTokenExpiry = () => {
+      const saved = localStorage.getItem('minja_owner_token');
+      if (saved && isJwtExpired(saved)) {
+        handleUnauthorized();
+      }
+    };
+
+    const intervalId = setInterval(checkTokenExpiry, 30000);
+    window.addEventListener('visibilitychange', checkTokenExpiry);
+
+    return () => {
+      window.removeEventListener('minja:unauthorized', handleUnauthorized);
+      clearInterval(intervalId);
+      window.removeEventListener('visibilitychange', checkTokenExpiry);
+    };
   }, []);
 
   // ==========================================
@@ -781,7 +799,7 @@ export const OwnerPortal: React.FC = () => {
   const [kioskNameInput, setKioskNameInput] = useState('');
   const [kioskLocationInput, setKioskLocationInput] = useState('');
   const [kioskCodeInput, setKioskCodeInput] = useState('');
-  const [kioskCapacityInput, setKioskCapacityInput] = useState<number>(400);
+  const kioskCapacityInput = 400;
   const [kioskPartnerIdInput, setKioskPartnerIdInput] = useState<string>('');
   const [isCreatingKiosk, setIsCreatingKiosk] = useState(false);
   const [createdKioskResult, setCreatedKioskResult] = useState<KioskItem | null>(null);
@@ -818,31 +836,7 @@ export const OwnerPortal: React.FC = () => {
     }
   };
 
-  // Modal: Refill Kertas
-  const [isRefillKioskModalOpen, setIsRefillKioskModalOpen] = useState(false);
-  const [targetRefillKiosk, setTargetRefillKiosk] = useState<KioskItem | null>(null);
-  const [refillCapacityInput, setRefillCapacityInput] = useState<number>(400);
-  const [isSubmittingRefill, setIsSubmittingRefill] = useState(false);
 
-  const handleConfirmRefillPaper = async () => {
-    if (!token || !targetRefillKiosk) return;
-    setIsSubmittingRefill(true);
-    try {
-      const res = await photoboothApi.refillOwnerKioskPaper(token, targetRefillKiosk.id, refillCapacityInput);
-      if (res.success) {
-        showFeedback('success', `Kertas [${targetRefillKiosk.code}] berhasil direfill (${refillCapacityInput} lembar)!`);
-        setIsRefillKioskModalOpen(false);
-        setTargetRefillKiosk(null);
-        fetchAllData();
-      } else {
-        showFeedback('error', res.error?.message || 'Gagal refill kertas');
-      }
-    } catch {
-      showFeedback('error', 'Gagal refill kertas');
-    } finally {
-      setIsSubmittingRefill(false);
-    }
-  };
 
   // Modal: Lock / Unlock Booth
   const [isLockKioskModalOpen, setIsLockKioskModalOpen] = useState(false);
@@ -1508,11 +1502,6 @@ export const OwnerPortal: React.FC = () => {
               setCreatedKioskResult(null);
               setIsCreateKioskModalOpen(true);
             }}
-            onOpenRefillModal={(k) => {
-              setTargetRefillKiosk(k);
-              setRefillCapacityInput(k.paperRollCapacity || 400);
-              setIsRefillKioskModalOpen(true);
-            }}
             onOpenLockModal={(k) => {
               setTargetLockKiosk(k);
               setIsLockKioskModalOpen(true);
@@ -1589,7 +1578,6 @@ export const OwnerPortal: React.FC = () => {
   function renderOverviewTab() {
     const analytics = networkAnalytics;
     const summary = analytics?.summary;
-    const criticalAlerts = analytics?.criticalPaperAlerts || [];
     const leaderboard = analytics?.partnersLeaderboard || [];
     const channelBreakdown = analytics?.breakdownByChannel;
 
@@ -1896,48 +1884,7 @@ export const OwnerPortal: React.FC = () => {
           </div>
         </div>
 
-        {/* PERINGATAN KERTAS KRITIS JARINGAN (< 50 LEMBAR) */}
-        {criticalAlerts.length > 0 && (
-          <div className="p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-rose-500/10 border border-rose-500/30 shadow-xl space-y-3">
-            <div className="flex items-center gap-2 text-rose-300 font-black text-xs sm:text-sm">
-              <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400 animate-pulse" />
-              <span>Peringatan Stok Kertas Menipis ({criticalAlerts.length} Booth)</span>
-            </div>
-            <p className="text-xs text-rose-200/80">
-              Kertas pada booth berikut tersisa di bawah 50 lembar. Segera hubungi operator lokasi untuk refill.
-            </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3 pt-1">
-              {criticalAlerts.map((k) => (
-                <div
-                  key={k.kioskId}
-                  className="p-3 sm:p-3.5 rounded-xl sm:rounded-2xl bg-slate-950/80 border border-rose-500/30 flex items-center justify-between"
-                >
-                  <div className="min-w-0 pr-2">
-                    <span className="text-xs font-bold text-white block truncate">[{k.kioskCode}] {k.kioskName}</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5 block truncate">Mitra: {k.partnerName}</span>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-xs sm:text-sm font-black font-mono text-rose-400 block">{k.paperRemaining} lbr</span>
-                    <button
-                      onClick={() => {
-                        const kiosk = kiosks.find((item) => item.id === k.kioskId);
-                        if (kiosk) {
-                          setTargetRefillKiosk(kiosk);
-                          setRefillCapacityInput(kiosk.paperRollCapacity || 400);
-                          setIsRefillKioskModalOpen(true);
-                        }
-                      }}
-                      className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 mt-1 cursor-pointer"
-                    >
-                      Refill Kertas
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* 2-COLUMN SECTION: LEADERBOARD MITRA & CHANNEL BREAKDOWN */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
@@ -2272,10 +2219,7 @@ export const OwnerPortal: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs font-mono">
-                    <span className="text-slate-400">Sisa Kertas:</span>
-                    <span className="text-white font-bold">{k.paperRemaining} / {k.paperRollCapacity} lbr</span>
-                  </div>
+
 
                   <div className="flex items-center gap-2 pt-1">
                     <button
@@ -3022,7 +2966,7 @@ export const OwnerPortal: React.FC = () => {
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
-                    <div>
+                    <div className="col-span-2">
                       <label className="text-xs font-semibold text-slate-300 block mb-1">Kode Booth (Opsional):</label>
                       <input
                         type="text"
@@ -3030,18 +2974,6 @@ export const OwnerPortal: React.FC = () => {
                         onChange={(e) => setKioskCodeInput(e.target.value)}
                         placeholder="MJA-03"
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 uppercase font-mono"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-semibold text-slate-300 block mb-1">Kapasitas Kertas:</label>
-                      <input
-                        type="number"
-                        min={50}
-                        max={1000}
-                        value={kioskCapacityInput}
-                        onChange={(e) => setKioskCapacityInput(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
                       />
                     </div>
                   </div>
@@ -3084,52 +3016,7 @@ export const OwnerPortal: React.FC = () => {
           </div>
         )}
 
-        {/* MODAL REFILL KERTAS */}
-        {isRefillKioskModalOpen && targetRefillKiosk && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
-                  <Printer className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-white">Refill Kertas Foto</h3>
-                  <p className="text-xs text-slate-400">[{targetRefillKiosk.code}] {targetRefillKiosk.name}</p>
-                </div>
-              </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">Kapasitas Roll Baru (Lembar):</label>
-                <input
-                  type="number"
-                  min={50}
-                  max={1000}
-                  value={refillCapacityInput}
-                  onChange={(e) => setRefillCapacityInput(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsRefillKioskModalOpen(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 cursor-pointer"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  disabled={isSubmittingRefill}
-                  onClick={handleConfirmRefillPaper}
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-black shadow-lg shadow-emerald-600/30 cursor-pointer"
-                >
-                  {isSubmittingRefill ? 'Menyimpan...' : 'Konfirmasi Refill'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* MODAL KUNCI BOOTH */}
         {isLockKioskModalOpen && targetLockKiosk && (

@@ -47,6 +47,89 @@ export interface UpdateOperatorInput {
   isActive?: boolean;
 }
 
+/**
+ * Menghitung rentang tanggal presisi berbasis Waktu Indonesia Barat (WIB / UTC+7).
+ * Berfungsi stabil di server mana pun (UTC VPS, Cloud, Local).
+ */
+export function calculateWibDateRange(
+  period: string = 'today',
+  customStartDate?: string,
+  customEndDate?: string
+): { rangeStart: Date; rangeEnd: Date; periodLabel: string } {
+  const wibNow = new Date(Date.now() + 7 * 3600 * 1000);
+  const y = wibNow.getUTCFullYear();
+  const m = wibNow.getUTCMonth();
+  const d = wibNow.getUTCDate();
+
+  // Helper untuk membuat Date UTC yang setara dengan jam WIB
+  const makeWibDate = (year: number, month: number, day: number, hours: number, minutes: number, seconds: number, ms: number) => {
+    return new Date(Date.UTC(year, month, day, hours, minutes, seconds, ms) - 7 * 3600 * 1000);
+  };
+
+  const startOfTodayWib = makeWibDate(y, m, d, 0, 0, 0, 0);
+  const endOfTodayWib = makeWibDate(y, m, d, 23, 59, 59, 999);
+
+  if (period === 'yesterday') {
+    return {
+      rangeStart: makeWibDate(y, m, d - 1, 0, 0, 0, 0),
+      rangeEnd: makeWibDate(y, m, d - 1, 23, 59, 59, 999),
+      periodLabel: 'Kemarin',
+    };
+  }
+
+  if (period === '7d') {
+    return {
+      rangeStart: makeWibDate(y, m, d - 6, 0, 0, 0, 0),
+      rangeEnd: endOfTodayWib,
+      periodLabel: '7 Hari Terakhir',
+    };
+  }
+
+  if (period === '30d') {
+    return {
+      rangeStart: makeWibDate(y, m, d - 29, 0, 0, 0, 0),
+      rangeEnd: endOfTodayWib,
+      periodLabel: '30 Hari Terakhir',
+    };
+  }
+
+  if (period === 'this_month') {
+    const monthName = startOfTodayWib.toLocaleDateString('id-ID', { month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' });
+    return {
+      rangeStart: makeWibDate(y, m, 1, 0, 0, 0, 0),
+      rangeEnd: endOfTodayWib,
+      periodLabel: `Bulan Ini (${monthName})`,
+    };
+  }
+
+  if (period === 'last_month') {
+    const lastMonthStart = makeWibDate(y, m - 1, 1, 0, 0, 0, 0);
+    const monthName = lastMonthStart.toLocaleDateString('id-ID', { month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' });
+    return {
+      rangeStart: lastMonthStart,
+      rangeEnd: makeWibDate(y, m, 0, 23, 59, 59, 999),
+      periodLabel: `Bulan Lalu (${monthName})`,
+    };
+  }
+
+  if (period === 'custom' && customStartDate && customEndDate) {
+    const [sy, sm, sd] = customStartDate.split('-').map(Number);
+    const [ey, em, ed] = customEndDate.split('-').map(Number);
+    return {
+      rangeStart: makeWibDate(sy, (sm || 1) - 1, sd || 1, 0, 0, 0, 0),
+      rangeEnd: makeWibDate(ey, (em || 1) - 1, ed || 1, 23, 59, 59, 999),
+      periodLabel: `${customStartDate} s/d ${customEndDate}`,
+    };
+  }
+
+  // Default: 'today'
+  return {
+    rangeStart: startOfTodayWib,
+    rangeEnd: endOfTodayWib,
+    periodLabel: 'Hari Ini',
+  };
+}
+
 export class PartnerService {
   constructor(private prisma: PrismaClient) {}
 
@@ -364,9 +447,7 @@ export class PartnerService {
       orderBy: { code: 'asc' },
     });
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
+    const { rangeStart: startOfTodayWib } = calculateWibDateRange('today');
     const now = Date.now();
 
     return Promise.all(
@@ -383,8 +464,18 @@ export class PartnerService {
         const todaySessions = await this.prisma.session.aggregate({
           where: {
             kioskId: k.id,
-            createdAt: { gte: startOfToday },
-            state: 'COMPLETED',
+            createdAt: { gte: startOfTodayWib },
+            totalPrice: { gt: 0 },
+            payments: {
+              none: {
+                paymentType: { in: ['TEST_BYPASS', 'BYPASS_PARTNER'] },
+              },
+            },
+            OR: [
+              { state: 'COMPLETED' },
+              { payments: { some: { transactionStatus: 'settlement' } } },
+              { accessCode: { isNot: null } },
+            ],
           },
           _sum: { totalPrice: true, photosPrinted: true },
           _count: { id: true },
@@ -398,6 +489,7 @@ export class PartnerService {
           status: dynamicStatus,
           paperRemaining: k.paperRemaining,
           paperRollCapacity: k.paperRollCapacity,
+          paperTrackingEnabled: Array.isArray(k.disabledPackageIds) && k.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
           printerStatus: k.printerStatus || 'UNKNOWN',
           cameraStatus: k.cameraStatus || 'UNKNOWN',
           isLocked: k.isLocked,
@@ -915,9 +1007,15 @@ export class PartnerService {
   }
 
   /**
-   * Partner: Penyesuaian manual sisa lembar kertas pada booth milik mitra
+   * Partner: Penyesuaian manual sisa lembar kertas pada booth milik mitra & toggle opsi pelacakan kertas
    */
-  async updateKioskPaper(partnerId: string, kioskId: string, paperRemaining: number) {
+  async updateKioskPaper(
+    partnerId: string,
+    kioskId: string,
+    rawInput: { paperRemaining?: number; paperTrackingEnabled?: boolean } | number
+  ) {
+    const input = typeof rawInput === 'number' ? { paperRemaining: rawInput } : rawInput;
+
     const kiosk = await this.prisma.kiosk.findFirst({
       where: { id: kioskId, partnerId },
     });
@@ -925,12 +1023,42 @@ export class PartnerService {
       throw new AppError(404, ErrorCode.NOT_FOUND, 'Booth tidak ditemukan atau tidak berada di bawah kepemilikan Anda.');
     }
 
-    const updated = await this.prisma.kiosk.update({
-      where: { id: kioskId },
-      data: { paperRemaining: Math.max(0, paperRemaining) },
-    });
+    const CONFIG_KEY = '__CFG:PAPER_TRACKING_ON__';
+    let currentDisabled = Array.isArray(kiosk.disabledPackageIds)
+      ? (kiosk.disabledPackageIds as string[])
+      : [];
 
-    humanLogger.info('PRINTER', `Mitra memperbarui sisa kertas booth [${updated.code}] menjadi ${updated.paperRemaining} lembar.`);
+    const updateData: any = {};
+
+    if (input.paperTrackingEnabled !== undefined) {
+      if (input.paperTrackingEnabled) {
+        if (!currentDisabled.includes(CONFIG_KEY)) {
+          currentDisabled = [...currentDisabled, CONFIG_KEY];
+        }
+      } else {
+        currentDisabled = currentDisabled.filter((id) => id !== CONFIG_KEY);
+      }
+      updateData.disabledPackageIds = currentDisabled;
+    }
+
+    if (input.paperRemaining !== undefined) {
+      updateData.paperRemaining = Math.max(0, input.paperRemaining);
+    }
+
+    const updated = Object.keys(updateData).length > 0
+      ? await this.prisma.kiosk.update({
+          where: { id: kioskId },
+          data: updateData,
+        })
+      : kiosk;
+
+    const isTrackingEnabled = Array.isArray(updated.disabledPackageIds) &&
+      updated.disabledPackageIds.includes(CONFIG_KEY);
+
+    humanLogger.info(
+      'PRINTER',
+      `Mitra memperbarui konfigurasi kertas booth [${updated.code}]: sisa ${updated.paperRemaining} lbr, tracking=${isTrackingEnabled ? 'AKTIF' : 'NONAKTIF'}.`
+    );
 
     return {
       kioskId: updated.id,
@@ -938,6 +1066,7 @@ export class PartnerService {
       name: updated.name,
       paperRemaining: updated.paperRemaining,
       paperRollCapacity: updated.paperRollCapacity,
+      paperTrackingEnabled: isTrackingEnabled,
     };
   }
 
@@ -1091,61 +1220,70 @@ export class PartnerService {
     }
 
     const kioskIds = targetKiosks.map((k) => k.id);
-
-    // Hitung rentang waktu berdasarkan filter periode
-    const now = new Date();
-    let rangeStart = new Date(now);
-    let rangeEnd = new Date(now);
-    let periodLabel = 'Hari Ini';
     const period = options.period || 'today';
+    const { rangeStart, rangeEnd, periodLabel } = calculateWibDateRange(period, options.startDate, options.endDate);
+    const { rangeStart: startOfTodayWib, rangeEnd: endOfTodayWib } = calculateWibDateRange('today');
+    const { rangeStart: startOfMonthWib } = calculateWibDateRange('this_month');
 
-    if (period === 'today') {
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Hari Ini';
-    } else if (period === 'yesterday') {
-      rangeStart.setDate(rangeStart.getDate() - 1);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setDate(rangeEnd.getDate() - 1);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Kemarin';
-    } else if (period === '7d') {
-      rangeStart.setDate(rangeStart.getDate() - 6);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = '7 Hari Terakhir';
-    } else if (period === '30d') {
-      rangeStart.setDate(rangeStart.getDate() - 29);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = '30 Hari Terakhir';
-    } else if (period === 'this_month') {
-      rangeStart.setDate(1);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Bulan Ini (' + rangeStart.toLocaleString('id-ID', { month: 'long', year: 'numeric' }) + ')';
-    } else if (period === 'last_month') {
-      rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
-      rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-      periodLabel = 'Bulan Lalu (' + rangeStart.toLocaleString('id-ID', { month: 'long', year: 'numeric' }) + ')';
-    } else if (period === 'custom' && options.startDate && options.endDate) {
-      rangeStart = new Date(options.startDate);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd = new Date(options.endDate);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = `${options.startDate} s/d ${options.endDate}`;
-    } else {
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Hari Ini';
+    if (kioskIds.length === 0) {
+      return {
+        period,
+        periodLabel,
+        dateRange: {
+          start: rangeStart.toISOString(),
+          end: rangeEnd.toISOString(),
+        },
+        partner: {
+          id: partner.id,
+          name: partner.name,
+          revenueSharePct: partner.revenueSharePct,
+        },
+        todayRevenue: 0,
+        monthRevenue: 0,
+        shareAmount: 0,
+        kiosks: [],
+        selectedKioskId: null,
+        selectedKioskCode: null,
+        selectedKioskName: null,
+        summary: {
+          totalGrossRevenue: 0,
+          grossRevenue: 0,
+          todayRevenue: 0,
+          monthRevenue: 0,
+          shareAmount: 0,
+          partnerShare: 0,
+          netPartnerShare: 0,
+          minjaShare: 0,
+          minjaRoyalty: 0,
+          totalSessions: 0,
+          aov: 0,
+          totalPaperUsed: 0,
+          totalPrints: 0,
+          totalExtraPrints: 0,
+          totalDiscountGiven: 0,
+        },
+        breakdown: {
+          qris: { count: 0, totalAmount: 0, percentage: 0 },
+          cashDesk: { count: 0, totalAmount: 0, percentage: 0 },
+          cashPass: { count: 0, totalAmount: 0, percentage: 0 },
+          extraPrints: { count: 0, totalAmount: 0, percentage: 0 },
+          voucherPromo: { count: 0, discountSavings: 0 },
+        },
+        kiosksComparison: [],
+        dailyTrend: [],
+      };
     }
 
-    // Ambil sesi selesai dalam rentang waktu
-    const completedSessions = await this.prisma.session.findMany({
+    // Ambil sesi berstatus lunas / selesai dalam rentang waktu terpilih
+    const eligibleSessions = await this.prisma.session.findMany({
       where: {
         kioskId: { in: kioskIds },
-        state: 'COMPLETED',
         createdAt: { gte: rangeStart, lte: rangeEnd },
+        OR: [
+          { state: 'COMPLETED' },
+          { payments: { some: { transactionStatus: 'settlement' } } },
+          { accessCode: { isNot: null } },
+        ],
       },
       include: {
         package: { select: { id: true, name: true, price: true } },
@@ -1153,21 +1291,29 @@ export class PartnerService {
         accessCode: { select: { id: true, code: true, type: true, cashierName: true } },
         payments: {
           where: { transactionStatus: 'settlement' },
-          select: { id: true, paymentType: true, grossAmount: true, orderId: true },
+          select: { id: true, paymentType: true, grossAmount: true, orderId: true, transactionStatus: true },
         },
       },
       orderBy: { createdAt: 'asc' },
     });
 
-    const grossRevenue = completedSessions.reduce((acc, s) => acc + s.totalPrice, 0);
-    const totalSessions = completedSessions.length;
+    // Filter keluar sesi Mode Test / Bypass dari kalkulasi omzet & keuangan
+    const paidSessions = eligibleSessions.filter((s) => {
+      const isTestBypass =
+        s.totalPrice === 0 ||
+        s.payments.some((p) => p.paymentType === 'TEST_BYPASS' || p.paymentType === 'BYPASS_PARTNER');
+      return !isTestBypass;
+    });
+
+    const grossRevenue = paidSessions.reduce((acc, s) => acc + s.totalPrice, 0);
+    const totalSessions = paidSessions.length;
     const netPartnerShare = Math.round((grossRevenue * partner.revenueSharePct) / 100);
     const minjaRoyalty = grossRevenue - netPartnerShare;
     const aov = totalSessions > 0 ? Math.round(grossRevenue / totalSessions) : 0;
-    const totalPaperUsed = completedSessions.reduce((acc, s) => acc + s.photosPrinted, 0);
-    const totalExtraPrints = completedSessions.reduce((acc, s) => acc + s.additionalPrints, 0);
+    const totalPaperUsed = paidSessions.reduce((acc, s) => acc + s.photosPrinted, 0);
+    const totalExtraPrints = paidSessions.reduce((acc, s) => acc + s.additionalPrints, 0);
 
-    // Payment Method Breakdown
+    // Payment Method Breakdown (Hanya transaksi komersial riil)
     let qrisAmount = 0;
     let qrisCount = 0;
     let cashDeskAmount = 0;
@@ -1177,7 +1323,7 @@ export class PartnerService {
     let extraPrintsAmount = 0;
     let extraPrintsCount = 0;
 
-    for (const s of completedSessions) {
+    for (const s of paidSessions) {
       if (s.additionalPrints > 0 && s.additionalPrintCost > 0) {
         extraPrintsAmount += s.additionalPrintCost;
         extraPrintsCount += s.additionalPrints;
@@ -1228,10 +1374,10 @@ export class PartnerService {
 
     // Kiosks Comparison
     const kiosksComparison = partner.kiosks.map((k) => {
-      const kSessions = completedSessions.filter((s) => s.kioskId === k.id);
-      const kRev = kSessions.reduce((acc, s) => acc + s.totalPrice, 0);
+      const kPaidSessions = paidSessions.filter((s) => s.kioskId === k.id);
+      const kRev = kPaidSessions.reduce((acc, s) => acc + s.totalPrice, 0);
       const kShare = Math.round((kRev * partner.revenueSharePct) / 100);
-      const kPrints = kSessions.reduce((acc, s) => acc + s.photosPrinted, 0);
+      const kPrints = kPaidSessions.reduce((acc, s) => acc + s.photosPrinted, 0);
 
       return {
         kioskId: k.id,
@@ -1242,15 +1388,16 @@ export class PartnerService {
         paperRollCapacity: k.paperRollCapacity,
         grossRevenue: kRev,
         partnerShare: kShare,
-        sessionsCount: kSessions.length,
+        sessionsCount: kPaidSessions.length,
         paperUsed: kPrints,
       };
     });
 
-    // Daily Trend
+    // Daily Trend (WIB Normalized)
     const dailyMap = new Map<string, { revenue: number; sessions: number }>();
-    for (const s of completedSessions) {
-      const dStr = s.createdAt.toISOString().slice(0, 10);
+    for (const s of paidSessions) {
+      const wibDate = new Date(s.createdAt.getTime() + 7 * 3600 * 1000);
+      const dStr = wibDate.toISOString().slice(0, 10);
       const curr = dailyMap.get(dStr) || { revenue: 0, sessions: 0 };
       curr.revenue += s.totalPrice;
       curr.sessions += 1;
@@ -1259,7 +1406,7 @@ export class PartnerService {
 
     const dailyTrend = Array.from(dailyMap.entries()).map(([date, data]) => {
       const dateObj = new Date(date);
-      const label = dateObj.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+      const label = dateObj.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', timeZone: 'Asia/Jakarta' });
       const pShare = Math.round((data.revenue * partner.revenueSharePct) / 100);
       return {
         date,
@@ -1270,18 +1417,48 @@ export class PartnerService {
       };
     });
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    // Query Omzet Hari Ini & Bulan Ini (WIB) secara independen agar kartu ringkasan selalu akurat
+    const [todayAgg, monthAgg] = await Promise.all([
+      this.prisma.session.aggregate({
+        where: {
+          kioskId: { in: kioskIds },
+          createdAt: { gte: startOfTodayWib, lte: endOfTodayWib },
+          totalPrice: { gt: 0 },
+          payments: {
+            none: {
+              paymentType: { in: ['TEST_BYPASS', 'BYPASS_PARTNER'] },
+            },
+          },
+          OR: [
+            { state: 'COMPLETED' },
+            { payments: { some: { transactionStatus: 'settlement' } } },
+            { accessCode: { isNot: null } },
+          ],
+        },
+        _sum: { totalPrice: true },
+      }),
+      this.prisma.session.aggregate({
+        where: {
+          kioskId: { in: kioskIds },
+          createdAt: { gte: startOfMonthWib, lte: endOfTodayWib },
+          totalPrice: { gt: 0 },
+          payments: {
+            none: {
+              paymentType: { in: ['TEST_BYPASS', 'BYPASS_PARTNER'] },
+            },
+          },
+          OR: [
+            { state: 'COMPLETED' },
+            { payments: { some: { transactionStatus: 'settlement' } } },
+            { accessCode: { isNot: null } },
+          ],
+        },
+        _sum: { totalPrice: true },
+      }),
+    ]);
 
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const todaySessions = completedSessions.filter((s) => s.createdAt >= startOfToday);
-    const todayRevenue = todaySessions.reduce((acc, s) => acc + s.totalPrice, 0);
-
-    const monthSessions = completedSessions.filter((s) => s.createdAt >= startOfMonth);
-    const monthRevenue = monthSessions.reduce((acc, s) => acc + s.totalPrice, 0);
+    const todayRevenue = todayAgg._sum.totalPrice || 0;
+    const monthRevenue = monthAgg._sum.totalPrice || 0;
     const shareAmount = Math.round((monthRevenue * partner.revenueSharePct) / 100);
 
     return {
@@ -1335,6 +1512,7 @@ export class PartnerService {
       kioskId?: string;
       startDate?: string;
       endDate?: string;
+      period?: string;
       status?: string;
       search?: string;
       page?: number;
@@ -1357,6 +1535,13 @@ export class PartnerService {
       kioskIds = [found.id];
     }
 
+    if (kioskIds.length === 0) {
+      return {
+        items: [],
+        pagination: { total: 0, page: 1, limit: options.limit || 20, totalPages: 1 },
+      };
+    }
+
     const page = Math.max(1, options.page || 1);
     const limit = Math.min(100, Math.max(1, options.limit || 20));
     const skip = (page - 1) * limit;
@@ -1365,22 +1550,30 @@ export class PartnerService {
       kioskId: { in: kioskIds },
     };
 
-    if (options.startDate || options.endDate) {
-      whereClause.createdAt = {};
-      if (options.startDate) {
-        const s = new Date(options.startDate);
-        s.setHours(0, 0, 0, 0);
-        whereClause.createdAt.gte = s;
-      }
-      if (options.endDate) {
-        const e = new Date(options.endDate);
-        e.setHours(23, 59, 59, 999);
-        whereClause.createdAt.lte = e;
-      }
+    if (options.period && options.period !== 'all') {
+      const { rangeStart, rangeEnd } = calculateWibDateRange(options.period, options.startDate, options.endDate);
+      whereClause.createdAt = {
+        gte: rangeStart,
+        lte: rangeEnd,
+      };
+    } else if (options.startDate || options.endDate) {
+      const { rangeStart, rangeEnd } = calculateWibDateRange('custom', options.startDate, options.endDate);
+      whereClause.createdAt = {
+        gte: rangeStart,
+        lte: rangeEnd,
+      };
     }
 
     if (options.status && options.status !== 'ALL') {
-      whereClause.state = options.status;
+      if (options.status === 'SETTLED' || options.status === 'COMPLETED' || options.status === 'LUNAS') {
+        whereClause.OR = [
+          { state: 'COMPLETED' },
+          { payments: { some: { transactionStatus: 'settlement' } } },
+          { accessCode: { isNot: null } },
+        ];
+      } else {
+        whereClause.state = options.status;
+      }
     }
 
     if (options.search) {
@@ -1415,17 +1608,27 @@ export class PartnerService {
 
     const items = sessions.map((s) => {
       const p = s.payments[0];
-      const isSettled = s.state === 'COMPLETED';
+      const isTestBypass =
+        s.totalPrice === 0 ||
+        s.payments.some((pm) => pm.paymentType === 'TEST_BYPASS' || pm.paymentType === 'BYPASS_PARTNER');
+
+      const isSettled =
+        s.state === 'COMPLETED' ||
+        s.payments.some((pm) => pm.transactionStatus === 'settlement') ||
+        !!s.accessCode;
+
       let method = 'QRIS';
-      if (s.accessCode) {
+      if (isTestBypass) {
+        method = 'Bypass (Mode Test)';
+      } else if (s.accessCode) {
         method = 'Kode PASS';
       } else if (p?.paymentType === 'cash' || p?.paymentType === 'CASH_DESK') {
         method = 'Tunai Kasir';
       }
 
-      const grossAmount = s.totalPrice;
-      const partnerShare = Math.round((grossAmount * partner.revenueSharePct) / 100);
-      const minjaRoyalty = grossAmount - partnerShare;
+      const grossAmount = isTestBypass ? 0 : s.totalPrice;
+      const partnerShare = isTestBypass ? 0 : Math.round((grossAmount * partner.revenueSharePct) / 100);
+      const minjaRoyalty = isTestBypass ? 0 : grossAmount - partnerShare;
 
       return {
         id: s.id,
@@ -1435,14 +1638,15 @@ export class PartnerService {
         kioskId: s.kioskId,
         kioskCode: s.kiosk?.code || '-',
         kioskName: s.kiosk?.name || '-',
-        packageName: s.package?.name || 'Paket Standar',
+        packageName: isTestBypass ? `${s.package?.name || 'Paket Foto'} (Test)` : (s.package?.name || 'Paket Standar'),
         additionalPrints: s.additionalPrints,
         grossAmount,
         partnerShare,
         minjaRoyalty,
         paymentMethod: method,
-        state: s.state,
-        statusLabel: isSettled ? 'Lunas' : s.state === 'CANCELLED' ? 'Dibatalkan' : 'Menunggu',
+        isTest: isTestBypass,
+        state: isTestBypass ? 'MODE_TEST' : s.state,
+        statusLabel: isTestBypass ? 'Mode Test (Rp 0)' : (isSettled ? 'Lunas' : s.state === 'CANCELLED' ? 'Dibatalkan' : 'Menunggu'),
         photosPrinted: s.photosPrinted,
         cashierName: s.accessCode?.cashierName || '-',
         customerNote: s.accessCode?.customerNote || '-',
@@ -1470,6 +1674,7 @@ export class PartnerService {
       kioskId?: string;
       startDate?: string;
       endDate?: string;
+      period?: string;
       status?: string;
       search?: string;
     }
@@ -1707,7 +1912,7 @@ export class PartnerService {
         id: k.id,
         code: k.code,
         name: k.name,
-        disabledPackageIds: (k.disabledPackageIds as string[]) || [],
+        disabledPackageIds: ((k.disabledPackageIds as string[]) || []).filter((id) => !id.startsWith('__CFG:')),
       })),
     };
   }
@@ -1879,9 +2084,18 @@ export class PartnerService {
 
     if (!kiosk) throw new AppError(404, ErrorCode.NOT_FOUND, 'Booth tidak ditemukan di akun Anda.');
 
+    const CONFIG_KEY = '__CFG:PAPER_TRACKING_ON__';
+    const hadTracking = Array.isArray(kiosk.disabledPackageIds) &&
+      kiosk.disabledPackageIds.includes(CONFIG_KEY);
+
+    let finalDisabled = disabledPackageIds.filter((id) => !id.startsWith('__CFG:'));
+    if (hadTracking) {
+      finalDisabled.push(CONFIG_KEY);
+    }
+
     const updated = await this.prisma.kiosk.update({
       where: { id: kioskId },
-      data: { disabledPackageIds },
+      data: { disabledPackageIds: finalDisabled },
     });
 
     humanLogger.info('KIOSK', `Mitra memperbarui paket booth [${updated.code}], ${disabledPackageIds.length} paket dinonaktifkan.`);
@@ -1889,7 +2103,7 @@ export class PartnerService {
     return {
       kioskId: updated.id,
       code: updated.code,
-      disabledPackageIds: (updated.disabledPackageIds as string[]) || [],
+      disabledPackageIds: ((updated.disabledPackageIds as string[]) || []).filter((id) => !id.startsWith('__CFG:')),
     };
   }
 
@@ -1947,6 +2161,128 @@ export class PartnerService {
       kioskId: updated.id,
       code: updated.code,
       message: `Booth [${updated.code}] berhasil direset ke mode standby.`,
+    };
+  }
+
+  /**
+   * Partner: Bypass jarak jauh booth pilihan mitra
+   * Meloloskan pembayaran sesi aktif langsung ke kamera atau membuatkan PASS bypass instan khusus booth ini
+   */
+  async remoteBypassKiosk(partnerId: string, kioskId: string) {
+    const kiosk = await this.prisma.kiosk.findFirst({
+      where: { id: kioskId, partnerId },
+      include: { partner: true },
+    });
+
+    if (!kiosk) throw new AppError(404, ErrorCode.NOT_FOUND, 'Booth tidak ditemukan di akun mitra Anda.');
+
+    // 1. Periksa apakah ada sesi aktif yang sedang menunggu pembayaran di booth ini
+    // Cek berdasarkan kioskId, dan fallback berdasarkan prefix ID sesi (contoh MJA01-)
+    const cleanCode = (kiosk.code || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    let activeSession = await this.prisma.session.findFirst({
+      where: {
+        kioskId,
+        state: 'AWAITING_PAYMENT',
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        payments: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    if (!activeSession && cleanCode) {
+      activeSession = await this.prisma.session.findFirst({
+        where: {
+          id: { startsWith: cleanCode },
+          state: 'AWAITING_PAYMENT',
+        },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          payments: { orderBy: { createdAt: 'desc' } },
+        },
+      });
+    }
+
+    if (activeSession) {
+      const now = new Date();
+      if (activeSession.payments && activeSession.payments.length > 0) {
+        await this.prisma.payment.updateMany({
+          where: { sessionId: activeSession.id },
+          data: {
+            transactionStatus: 'settlement',
+            paymentType: 'TEST_BYPASS',
+            grossAmount: 0,
+            settlementTime: now,
+            isVerified: true,
+          },
+        });
+      } else {
+        await this.prisma.payment.create({
+          data: {
+            sessionId: activeSession.id,
+            orderId: `BYPASS-${activeSession.id.slice(-8).toUpperCase()}-${Date.now().toString().slice(-4)}`,
+            grossAmount: 0,
+            paymentType: 'TEST_BYPASS',
+            transactionStatus: 'settlement',
+            isVerified: true,
+            expiryTime: new Date(now.getTime() + 3600000),
+            settlementTime: now,
+          },
+        });
+      }
+
+      await this.prisma.session.update({
+        where: { id: activeSession.id },
+        data: {
+          kioskId: kiosk.id,
+          state: 'PAYMENT_CONFIRMED',
+          totalPrice: 0,
+          basePrice: 0,
+          additionalPrintCost: 0,
+        },
+      });
+
+      humanLogger.success('KIOSK', `Mitra [${kiosk.partner.name}] meloloskan pembayaran (Bypass Mode Test) sesi aktif [${activeSession.id.slice(-6).toUpperCase()}] di booth [${kiosk.code}] (Gross Rp 0)`);
+
+      return {
+        success: true,
+        mode: 'SESSION_BYPASS',
+        sessionCode: activeSession.id.slice(-6).toUpperCase(),
+        message: `Sesi aktif di booth [${kiosk.code}] berhasil diloloskan langsung ke kamera! (Mode Test: Rp 0, tidak masuk catatan pemasukan).`,
+      };
+    }
+
+    // 2. Jika tidak ada sesi aktif, buatkan tiket PASS bypass sesi gratis 100% khusus booth ini
+    const accessCodeService = new AccessCodeService(this.prisma);
+    const defaultPackage = await this.prisma.package.findFirst({
+      where: {
+        OR: [
+          { partnerId, isActive: true },
+          { partnerId: null, isActive: true },
+        ],
+      },
+      orderBy: { sortOrder: 'asc' },
+    });
+
+    const createdPass = await accessCodeService.createAccessCode({
+      packageId: defaultPackage?.id || null,
+      type: 'SESSION',
+      extraPrints: 0,
+      kioskId: kiosk.id,
+      amount: 0,
+      customerNote: 'Bypass Mandiri Mitra (Mode Test)',
+      cashierName: `Mitra (${kiosk.partner.name})`,
+      expiresInHours: 24,
+      partnerId,
+    });
+
+    humanLogger.success('PASS', `Mitra [${kiosk.partner.name}] menerbitkan Kode PASS Bypass [${createdPass.code}] khusus booth [${kiosk.code}] (Mode Test Rp 0)`);
+
+    return {
+      success: true,
+      mode: 'PASS_CODE_GENERATED',
+      passCode: createdPass.code,
+      message: `Kode PASS Bypass [${createdPass.code}] berhasil diterbitkan khusus booth [${kiosk.code}] (Mode Test: Rp 0).`,
     };
   }
 

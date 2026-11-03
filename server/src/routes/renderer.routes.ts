@@ -9,14 +9,16 @@ import { sendSuccess, sendError } from '../middleware/error.middleware.js';
 import { ErrorCode } from '../types/common.types.js';
 
 const renderSlotSchema = z.object({
-  index: z.number(),
+  index: z.number().optional(),
+  id: z.string().optional(),
+  layerIndex: z.number().optional(),
   x: z.number(),
   y: z.number(),
   width: z.number(),
   height: z.number(),
   rotation: z.number().optional(),
   borderRadius: z.number().optional(),
-});
+}).passthrough();
 
 const renderTemplateSchema = z.object({
   id: z.string(),
@@ -24,9 +26,9 @@ const renderTemplateSchema = z.object({
   layoutType: z.string().optional(),
   width: z.number().optional(),
   height: z.number().optional(),
-  frameUrl: z.string().optional(),
+  frameUrl: z.string().optional().nullable(),
   slots: z.array(renderSlotSchema),
-});
+}).passthrough();
 
 const renderSlotAdjustmentSchema = z.object({
   scale: z.number().optional(),
@@ -34,7 +36,7 @@ const renderSlotAdjustmentSchema = z.object({
   panY: z.number().optional(),
   rotation: z.number().optional(),
   filter: z.string().optional(),
-});
+}).passthrough();
 
 const renderStickerSchema = z.object({
   id: z.string(),
@@ -44,7 +46,7 @@ const renderStickerSchema = z.object({
   width: z.number(),
   height: z.number(),
   rotation: z.number().optional(),
-});
+}).passthrough();
 
 const renderTextSchema = z.object({
   id: z.string(),
@@ -57,7 +59,7 @@ const renderTextSchema = z.object({
   rotation: z.number().optional(),
   isBold: z.boolean().optional(),
   isItalic: z.boolean().optional(),
-});
+}).passthrough();
 
 const renderCompositionSchema = z.object({
   sessionId: z.string(),
@@ -70,7 +72,9 @@ const renderCompositionSchema = z.object({
       brightness: z.number().optional(),
       contrast: z.number().optional(),
       saturation: z.number().optional(),
+      rotation: z.number().optional(),
     })
+    .passthrough()
     .optional(),
   slotAdjustments: z.record(z.string(), renderSlotAdjustmentSchema).optional(),
   stickers: z.array(renderStickerSchema).optional(),
@@ -94,8 +98,18 @@ export const rendererRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      const template = {
+        ...parsedBody.template,
+        frameUrl: parsedBody.template.frameUrl ?? undefined,
+        slots: parsedBody.template.slots.map((s, idx) => ({
+          ...s,
+          index: s.index ?? idx,
+        })),
+      };
+
       const result = await nativeRendererService.renderComposition({
         ...parsedBody,
+        template: template as any,
         slotAdjustments,
       });
 

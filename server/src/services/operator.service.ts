@@ -10,6 +10,7 @@ import { AppError, ErrorCode } from '../types/common.types.js';
 import { verifyPin, signCustomToken } from '../utils/auth.util.js';
 import { AccessCodeService } from './accessCode.service.js';
 import { PrintService } from './print.service.js';
+import { KioskService } from './kiosk.service.js';
 import { humanLogger } from '../utils/humanLogger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -151,6 +152,7 @@ export class OperatorService {
       status: k.status,
       paperRemaining: k.paperRemaining,
       paperRollCapacity: k.paperRollCapacity,
+      paperTrackingEnabled: Array.isArray(k.disabledPackageIds) && k.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
       printerStatus: k.printerStatus || 'READY',
       cameraStatus: k.cameraStatus || 'READY',
       isLocked: k.isLocked,
@@ -273,6 +275,10 @@ export class OperatorService {
       throw new AppError(404, ErrorCode.NOT_FOUND, 'Operator tidak ditemukan.');
     }
 
+    if (!operator.partnerId && !operator.kioskId) {
+      throw new AppError(403, ErrorCode.FORBIDDEN, 'Akun kasir ini tidak terhubung dengan mitra atau booth aktif.');
+    }
+
     let targetKioskId = operator.kioskId;
     if (!targetKioskId && operator.partnerId) {
       const partnerKiosk = await this.prisma.kiosk.findFirst({
@@ -301,6 +307,7 @@ export class OperatorService {
       cashierName: operator.name,
       kioskId: targetKioskId || undefined,
       operatorId: operator.id,
+      partnerId: operator.partnerId || undefined,
       expiresInHours: 24,
     });
 
@@ -402,23 +409,25 @@ export class OperatorService {
       throw new AppError(404, ErrorCode.NOT_FOUND, 'Operator tidak ditemukan.');
     }
 
-    let targetKioskId = operator.kioskId;
-    if (!targetKioskId && operator.partnerId) {
-      const partnerKiosk = await this.prisma.kiosk.findFirst({
+    let kioskFilter: any = null;
+    if (operator.kioskId) {
+      kioskFilter = operator.kioskId;
+    } else if (operator.partnerId) {
+      const partnerKiosks = await this.prisma.kiosk.findMany({
         where: { partnerId: operator.partnerId },
+        select: { id: true },
       });
-      if (partnerKiosk) {
-        targetKioskId = partnerKiosk.id;
-      } else {
-        const anyKiosk = await this.prisma.kiosk.findFirst();
-        if (anyKiosk) targetKioskId = anyKiosk.id;
-      }
+      const ids = partnerKiosks.map((k) => k.id);
+      if (ids.length === 0) return []; // Aman mutlak: jika mitra belum memiliki booth, jangan pernah query acak
+      kioskFilter = { in: ids };
+    } else {
+      return []; // Operator tidak terhubung ke booth atau mitra mana pun
     }
 
-    const whereClause: any = { state: 'COMPLETED' };
-    if (targetKioskId) {
-      whereClause.kioskId = targetKioskId;
-    }
+    const whereClause: any = {
+      kioskId: kioskFilter,
+      state: { notIn: ['CANCELLED', 'EXPIRED'] },
+    };
 
     const sessions = await this.prisma.session.findMany({
       where: whereClause,
@@ -439,7 +448,7 @@ export class OperatorService {
       if (fs.existsSync(this.printStorageDir)) {
         diskFiles = fs.readdirSync(this.printStorageDir);
       }
-    } catch {}
+    } catch { }
 
     return sessions.map((s) => {
       const matchingFile = diskFiles.find((f) => f.startsWith(s.id) && f.endsWith('.jpg'));
@@ -490,33 +499,65 @@ export class OperatorService {
       ? await this.prisma.session.findFirst({ where: { id: sessionId, kioskId: targetKioskId } })
       : null;
 
-    if (!session) {
-      session = await this.prisma.session.findUnique({ where: { id: sessionId } });
+    if (!session && operator.partnerId) {
+      session = await this.prisma.session.findFirst({
+        where: {
+          id: sessionId,
+          kiosk: { partnerId: operator.partnerId },
+        },
+      });
     }
 
     if (!session) {
-      throw new AppError(404, ErrorCode.NOT_FOUND, 'Sesi tidak ditemukan.');
+      throw new AppError(404, ErrorCode.NOT_FOUND, 'Sesi tidak ditemukan atau bukan milik gerai booth Anda.');
     }
 
     humanLogger.warn('REPRINT', `Operator ${operator.name} memicu reprint darurat sesi: ${sessionId} (${copies} lembar)`);
 
+    const finalCopies = Math.max(1, Math.min(4, copies));
+    const finalReason = reason || `Reprint darurat oleh kasir: ${operator.name}`;
+    const kioskToDecrement = session.kioskId || targetKioskId;
+
+    // Daftarkan ke Remote Print Queue agar komputer booth fisik mengeksekusi via Heartbeat
+    if (kioskToDecrement) {
+      KioskService.queuePrintCommand(kioskToDecrement, {
+        id: `reprint_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        sessionId,
+        copies: finalCopies,
+        reason: finalReason,
+        requestedBy: operator.name,
+        createdAt: new Date().toISOString(),
+      });
+      humanLogger.success('REPRINT', `Perintah cetak ulang sesi ${sessionId} (${finalCopies} lembar) berhasil didaftarkan ke antrean booth [${kioskToDecrement}].`);
+    }
+
     const result = await this.printService.reprintJob({
       sessionId,
-      copies: Math.max(1, Math.min(4, copies)),
-      reason: reason || `Reprint darurat oleh kasir: ${operator.name}`,
+      copies: finalCopies,
+      reason: finalReason,
     });
 
-    // Kurangi estimasi sisa kertas booth jika berhasil
-    const kioskToDecrement = session.kioskId || targetKioskId;
+    // Kurangi estimasi sisa kertas booth jika berhasil dan jika pelacakan kertas diaktifkan
     if (kioskToDecrement) {
       try {
-        await this.prisma.kiosk.update({
+        const kiosk = await this.prisma.kiosk.findUnique({
           where: { id: kioskToDecrement },
-          data: {
-            paperRemaining: { decrement: copies },
-          },
+          select: { id: true, disabledPackageIds: true },
         });
-      } catch {}
+        const isTracking = Boolean(
+          kiosk &&
+          Array.isArray(kiosk.disabledPackageIds) &&
+          kiosk.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__')
+        );
+        if (isTracking) {
+          await this.prisma.kiosk.update({
+            where: { id: kioskToDecrement },
+            data: {
+              paperRemaining: { decrement: finalCopies },
+            },
+          });
+        }
+      } catch { }
     }
 
     return result;

@@ -3,7 +3,6 @@
 
 import React from 'react';
 import {
-  Printer,
   Lock,
   Unlock,
   Plus,
@@ -17,7 +16,6 @@ export interface FleetTabProps {
   partners: PartnerItem[];
   globalPartnerFilter: string;
   onOpenCreateModal: () => void;
-  onOpenRefillModal: (kiosk: KioskItem) => void;
   onOpenLockModal: (kiosk: KioskItem) => void;
   onUnlockKiosk: (id: string, code: string) => void;
   onConfigurePackages: (kiosk: KioskItem) => void;
@@ -31,7 +29,6 @@ export const FleetTab: React.FC<FleetTabProps> = ({
   partners,
   globalPartnerFilter,
   onOpenCreateModal,
-  onOpenRefillModal,
   onOpenLockModal,
   onUnlockKiosk,
   onConfigurePackages,
@@ -55,7 +52,7 @@ export const FleetTab: React.FC<FleetTabProps> = ({
             Booth ({relevantKiosks.length} Mesin)
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Monitoring sisa kertas foto, kunci jarak jauh, dan reset sesi seluruh booth fisik
+            Monitoring status hardware, lisensi, kunci jarak jauh, dan reset sesi seluruh booth fisik
           </p>
         </div>
 
@@ -71,7 +68,6 @@ export const FleetTab: React.FC<FleetTabProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
         {relevantKiosks.map((k) => {
           const partner = partners.find((p) => p.id === k.partnerId);
-          const isLowPaper = k.paperRemaining <= 50;
 
           return (
             <div
@@ -104,55 +100,20 @@ export const FleetTab: React.FC<FleetTabProps> = ({
                 </div>
               </div>
 
-              {/* Paper Status Gauge */}
-              <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-400">Sisa Kertas Lab:</span>
-                  <span
-                    className={`font-mono font-bold ${
-                      isLowPaper ? 'text-rose-400 animate-pulse' : 'text-white'
-                    }`}
-                  >
-                    {k.paperRemaining} / {k.paperRollCapacity} lbr
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      isLowPaper ? 'bg-rose-500' : 'bg-indigo-500'
-                    }`}
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (k.paperRemaining / (k.paperRollCapacity || 400)) * 100
-                      )}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  onClick={() => onOpenRefillModal(k)}
-                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Refill</span>
-                </button>
-
+              <div className="pt-1">
                 {k.isLocked ? (
                   <button
                     onClick={() => onUnlockKiosk(k.id, k.code)}
-                    className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-emerald-600/30"
+                    className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-emerald-600/30"
                   >
                     <Unlock className="w-3.5 h-3.5" />
-                    <span>Buka Kunci</span>
+                    <span>Buka Kunci Booth</span>
                   </button>
                 ) : (
                   <button
                     onClick={() => onOpenLockModal(k)}
-                    className="py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-amber-600/30"
+                    className="w-full py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-amber-600/30"
                   >
                     <Lock className="w-3.5 h-3.5" />
                     <span>Kunci Booth</span>

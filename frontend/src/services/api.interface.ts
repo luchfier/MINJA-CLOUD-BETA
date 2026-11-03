@@ -382,7 +382,7 @@ export interface IPhotoboothApi {
   deletePartnerPass(token: string | undefined, passId: string): Promise<ApiResponse<{ success: boolean; message: string }>>;
   revokePartnerPass(token: string | undefined, passId: string, reason?: string): Promise<ApiResponse<{ success: boolean; message: string; status: string }>>;
   extendPartnerPass(token: string | undefined, passId: string, hours?: number): Promise<ApiResponse<{ success: boolean; message: string; expiresAt: string }>>;
-  updatePartnerKioskPaper(token: string | undefined, kioskId: string, paperRemaining: number): Promise<ApiResponse<any>>;
+  updatePartnerKioskPaper(token: string | undefined, kioskId: string, paperRemaining?: number, paperTrackingEnabled?: boolean): Promise<ApiResponse<any>>;
   updatePartnerKiosk(
     token: string | undefined,
     kioskId: string,
@@ -410,11 +410,11 @@ export interface IPhotoboothApi {
   ): Promise<ApiResponse<import('../types/api').PartnerFinancialAnalyticsResponse>>;
   getPartnerTransactions(
     token: string | undefined,
-    params?: { kioskId?: string; startDate?: string; endDate?: string; status?: string; search?: string; page?: number; limit?: number }
+    params?: { kioskId?: string; startDate?: string; endDate?: string; period?: string; status?: string; search?: string; page?: number; limit?: number }
   ): Promise<ApiResponse<{ items: import('../types/api').PartnerTransactionItem[]; pagination: { total: number; page: number; limit: number; totalPages: number } }>>;
   exportPartnerTransactionsCsv(
     token: string | undefined,
-    params?: { kioskId?: string; startDate?: string; endDate?: string; status?: string; search?: string }
+    params?: { kioskId?: string; startDate?: string; endDate?: string; period?: string; status?: string; search?: string }
   ): Promise<string>;
   getPartnerSessions(
     token: string | undefined,
@@ -436,6 +436,7 @@ export interface IPhotoboothApi {
   ): Promise<ApiResponse<{ success: boolean; message?: string }>>;
   updatePartnerKioskPackages(token: string | undefined, kioskId: string, disabledPackageIds: string[]): Promise<ApiResponse<any>>;
   remoteResetPartnerKiosk(token: string | undefined, kioskId: string): Promise<ApiResponse<{ success: boolean; message: string }>>;
+  remoteBypassPartnerKiosk(token: string | undefined, kioskId: string): Promise<ApiResponse<{ success: boolean; mode: string; sessionCode?: string; passCode?: string; message: string }>>;
   remoteLockPartnerKiosk(token: string | undefined, kioskId: string, isLocked: boolean, reason?: string): Promise<ApiResponse<{ success: boolean; isLocked: boolean; lockReason?: string }>>;
   getPartnerVouchers(token: string | undefined): Promise<ApiResponse<import('../types/api').PartnerVoucherItem[]>>;
   createPartnerVoucher(token: string | undefined, data: import('../types/api').CreatePartnerVoucherRequest): Promise<ApiResponse<import('../types/api').PartnerVoucherItem>>;

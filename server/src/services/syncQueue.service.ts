@@ -11,6 +11,7 @@ import { StorageService } from './storage.service.js';
 import { EmailService } from './email.service.js';
 import { formatSessionCode } from '../utils/session.util.js';
 import { humanLogger } from '../utils/humanLogger.js';
+import { getEnv } from '../config/env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -576,6 +577,22 @@ export class SyncQueueService {
     }
 
     // 2. Pastikan record Session ada di Supabase
+    let syncKioskId: string | null = null;
+    try {
+      const apiKey = getEnv().BOOTH_API_KEY;
+      if (apiKey && apiKey !== 'dev-booth-key-for-testing') {
+        const k = await this.prisma.kiosk.findUnique({ where: { apiKey } });
+        if (k) syncKioskId = k.id;
+      }
+      if (!syncKioskId) {
+        const code = getEnv().KIOSK_CODE;
+        if (code) {
+          const k = await this.prisma.kiosk.findFirst({ where: { code } });
+          if (k) syncKioskId = k.id;
+        }
+      }
+    } catch {}
+
     const existingSession = await this.prisma.session.findUnique({
       where: { id: item.sessionId },
     });
@@ -585,6 +602,7 @@ export class SyncQueueService {
         data: {
           id: item.sessionId,
           packageId: pkg.id,
+          kioskId: syncKioskId,
           state: 'COMPLETED',
           basePrice: pkg.price,
           additionalPrints: 0,
@@ -598,6 +616,12 @@ export class SyncQueueService {
           expiresAt: new Date(expiresAtIso),
         },
       });
+    } else if (!existingSession.kioskId && syncKioskId) {
+      // Pulihkan asosiasi booth untuk sesi yang sebelumnya sempat sync tanpa kioskId
+      await this.prisma.session.update({
+        where: { id: existingSession.id },
+        data: { kioskId: syncKioskId },
+      }).catch(() => {});
     }
 
     // 3. Pastikan record Gallery ada di Supabase

@@ -54,8 +54,10 @@ import {
   Eye,
   Ban,
   FileText,
+  Zap,
 } from 'lucide-react';
 import { photoboothApi } from '../../services/photoboothApi';
+import { isJwtExpired } from '../../services/httpPhotoboothApi';
 import { ExecutiveSummaryModal } from '../../components/admin/ExecutiveSummaryModal';
 import { usePwaInstall } from '../../utils/usePwaInstall';
 import {
@@ -75,7 +77,13 @@ type TabKey = 'analytics' | 'vouchers' | 'sessions' | 'packages' | 'kiosks' | 'o
 export const PartnerPortal: React.FC = () => {
   // Auth state
   const [partnerToken, setPartnerToken] = useState<string | null>(() => {
-    return localStorage.getItem('minja_partner_token');
+    const saved = localStorage.getItem('minja_partner_token');
+    if (saved && !isJwtExpired(saved)) {
+      return saved;
+    }
+    localStorage.removeItem('minja_partner_token');
+    localStorage.removeItem('minja_partner_info');
+    return null;
   });
   const [partnerInfo, setPartnerInfo] = useState<PartnerItem | null>(() => {
     const saved = localStorage.getItem('minja_partner_info');
@@ -98,7 +106,7 @@ export const PartnerPortal: React.FC = () => {
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
   const [isSyncingPending, setIsSyncingPending] = useState(false);
 
-  // Tangkap event 401 Unauthorized secara terpusat untuk cegah loop saat token expired
+  // Tangkap event 401 Unauthorized secara terpusat & watchdog kedaluwarsa JWT proaktif
   useEffect(() => {
     const handleUnauthorized = () => {
       localStorage.removeItem('minja_partner_token');
@@ -107,8 +115,24 @@ export const PartnerPortal: React.FC = () => {
       setPartnerInfo(null);
       setLoginError('Sesi login telah kedaluwarsa. Silakan masukkan kata sandi kembali.');
     };
+
     window.addEventListener('minja:unauthorized', handleUnauthorized);
-    return () => window.removeEventListener('minja:unauthorized', handleUnauthorized);
+
+    const checkTokenExpiry = () => {
+      const saved = localStorage.getItem('minja_partner_token');
+      if (saved && isJwtExpired(saved)) {
+        handleUnauthorized();
+      }
+    };
+
+    const intervalId = setInterval(checkTokenExpiry, 30000);
+    window.addEventListener('visibilitychange', checkTokenExpiry);
+
+    return () => {
+      window.removeEventListener('minja:unauthorized', handleUnauthorized);
+      clearInterval(intervalId);
+      window.removeEventListener('visibilitychange', checkTokenExpiry);
+    };
   }, []);
 
   // ==========================================
@@ -311,9 +335,13 @@ export const PartnerPortal: React.FC = () => {
   const [lockReason, setLockReason] = useState('Pengisian ulang kertas / pemeliharaan berkala');
   const [isLocking, setIsLocking] = useState(false);
 
-  // Remote Reset (Bypass) confirmation modal
+  // Remote Reset confirmation modal
   const [resetKioskTarget, setResetKioskTarget] = useState<KioskItem | null>(null);
   const [isResettingKiosk, setIsResettingKiosk] = useState(false);
+
+  // Remote Bypass Booth confirmation modal
+  const [bypassKioskTarget, setBypassKioskTarget] = useState<KioskItem | null>(null);
+  const [isBypassingKiosk, setIsBypassingKiosk] = useState(false);
 
   // Edit Booth Details Modal
   const [editingKiosk, setEditingKiosk] = useState<KioskItem | null>(null);
@@ -388,6 +416,7 @@ export const PartnerPortal: React.FC = () => {
         kioskId: financialKioskId !== 'ALL' ? financialKioskId : undefined,
         status: txStatus !== 'ALL' ? txStatus : undefined,
         search: txSearch.trim() || undefined,
+        period: financialPeriod,
         startDate: financialPeriod === 'custom' ? financialStartDate : undefined,
         endDate: financialPeriod === 'custom' ? financialEndDate : undefined,
         page: txPage,
@@ -600,6 +629,7 @@ export const PartnerPortal: React.FC = () => {
         kioskId: financialKioskId !== 'ALL' ? financialKioskId : undefined,
         status: txStatus !== 'ALL' ? txStatus : undefined,
         search: txSearch.trim() || undefined,
+        period: financialPeriod,
         startDate: financialPeriod === 'custom' ? financialStartDate : undefined,
         endDate: financialPeriod === 'custom' ? financialEndDate : undefined,
       });
@@ -742,6 +772,43 @@ export const PartnerPortal: React.FC = () => {
     }
   };
 
+  // Remote Bypass Booth (Loloskan pembayaran sesi aktif atau terbitkan PASS bypass instan)
+  const handleConfirmBypassKiosk = async () => {
+    if (!partnerToken || !bypassKioskTarget) return;
+    setIsBypassingKiosk(true);
+
+    try {
+      const res = await photoboothApi.remoteBypassPartnerKiosk(partnerToken, bypassKioskTarget.id);
+      if (res.success && res.data) {
+        showNotification(res.data.message || `Booth [${bypassKioskTarget.code}] berhasil di-bypass.`);
+        if (res.data.mode === 'PASS_CODE_GENERATED' && res.data.passCode) {
+          setCreatedPassResult({
+            id: 'temp-' + Date.now(),
+            code: res.data.passCode,
+            type: 'SESSION',
+            amount: 0,
+            status: 'ACTIVE',
+            expiresAt: new Date(Date.now() + 86400000).toISOString(),
+            createdAt: new Date().toISOString(),
+            kioskCode: bypassKioskTarget.code,
+            kioskName: bypassKioskTarget.name,
+            customerNote: 'Bypass Jarak Jauh Mitra',
+          } as any);
+        }
+        setBypassKioskTarget(null);
+        fetchKiosksAndProfile();
+        fetchOperatorsAndPasses();
+      } else {
+        const errMsg = !res.success ? (res as any).error?.message : 'Gagal mem-bypass booth.';
+        showNotification(undefined, errMsg || 'Gagal mem-bypass booth.');
+      }
+    } catch (e: any) {
+      showNotification(undefined, e?.message || 'Koneksi gagal');
+    } finally {
+      setIsBypassingKiosk(false);
+    }
+  };
+
   // Remote Lock / Maintenance Mode
   const handleToggleLockKiosk = async () => {
     if (!partnerToken || !lockKiosk) return;
@@ -781,9 +848,9 @@ export const PartnerPortal: React.FC = () => {
 
     setIsSavingPaper(true);
     try {
-      const res = await photoboothApi.updatePartnerKioskPaper(partnerToken, paperModalKiosk.id, sheets);
+      const res = await photoboothApi.updatePartnerKioskPaper(partnerToken, paperModalKiosk.id, sheets, true);
       if (res.success) {
-        showNotification(`Sisa kertas [${paperModalKiosk.code}] diperbarui menjadi ${sheets} lembar.`);
+        showNotification(`Sisa kertas [${paperModalKiosk.code}] diperbarui menjadi ${sheets} lembar (Pelacakan Aktif).`);
         setPaperModalKiosk(null);
         fetchKiosksAndProfile();
       } else {
@@ -793,6 +860,27 @@ export const PartnerPortal: React.FC = () => {
       showNotification(undefined, e?.message || 'Koneksi gagal');
     } finally {
       setIsSavingPaper(false);
+    }
+  };
+
+  // Toggle Paper Tracking Option
+  const handleTogglePaperTracking = async (kiosk: KioskItem) => {
+    if (!partnerToken) return;
+    const nextState = !kiosk.paperTrackingEnabled;
+    try {
+      const res = await photoboothApi.updatePartnerKioskPaper(partnerToken, kiosk.id, kiosk.paperRemaining, nextState);
+      if (res.success) {
+        showNotification(
+          nextState
+            ? `Pelacakan sisa kertas pada booth [${kiosk.code}] diaktifkan.`
+            : `Pelacakan sisa kertas pada booth [${kiosk.code}] dinonaktifkan (bebas cetak).`
+        );
+        fetchKiosksAndProfile();
+      } else {
+        showNotification(undefined, res.error?.message || 'Gagal mengubah status pelacakan kertas.');
+      }
+    } catch (e: any) {
+      showNotification(undefined, e?.message || 'Koneksi gagal');
     }
   };
 
@@ -1644,6 +1732,26 @@ export const PartnerPortal: React.FC = () => {
                 </button>
               )}
 
+              {activeTab === 'passes' && (
+                <button
+                  onClick={() => {
+                    setPassType('SESSION');
+                    setPassPackageId(packagesList[0]?.id || '');
+                    setPassAmount(String(packagesList[0]?.price || 45000));
+                    setPassExtraPrints(1);
+                    setPassKioskId('ALL');
+                    setPassCustomerNote('');
+                    setPassCashierName(`Mitra (${partnerInfo?.name || 'Cabang'})`);
+                    setPassExpiresInHours(24);
+                    setShowCreatePassModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 text-xs font-black transition-all flex items-center gap-1.5 shadow-lg shadow-amber-500/20"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Terbitkan Kode PASS</span>
+                </button>
+              )}
+
               {/* Force Sync Cloud Button for Partner */}
               <button
                 onClick={handlePartnerForceSync}
@@ -2108,7 +2216,7 @@ export const PartnerPortal: React.FC = () => {
                               </span>
                             </td>
                             <td className="py-2.5 px-3 font-semibold text-slate-300">
-                              {k.paperRemaining} / {k.paperRollCapacity} lbr
+                              {(k as any).paperTrackingEnabled ? `${k.paperRemaining} / ${k.paperRollCapacity} lbr` : <span className="text-slate-500 text-xs">Nonaktif</span>}
                             </td>
                             <td className="py-2.5 px-3 font-semibold text-slate-300">
                               {k.sessionsCount} sesi ({k.paperUsed} lbr)
@@ -2834,28 +2942,56 @@ export const PartnerPortal: React.FC = () => {
                             </button>
                           </div>
 
-                          {/* Paper Status */}
-                          <div className="mt-4 p-3 rounded-xl bg-slate-800/40 border border-slate-800/80">
-                            <div className="flex items-center justify-between text-xs mb-1.5">
+                          {/* Paper Status with Optional Toggle */}
+                          <div className="mt-4 p-3.5 rounded-xl bg-slate-800/40 border border-slate-800/80 space-y-2.5">
+                            <div className="flex items-center justify-between text-xs">
                               <span className="font-semibold text-slate-300 flex items-center gap-1.5">
                                 <Printer className="w-3.5 h-3.5 text-slate-400" />
-                                <span>Sisa Kertas Fisik</span>
+                                <span>Lacak Sisa Kertas</span>
                               </span>
-                              <span className={`font-mono font-bold ${isPaperLow ? 'text-rose-400' : 'text-slate-200'}`}>
-                                {kiosk.paperRemaining} / {kiosk.paperRollCapacity || 400} lbr
-                              </span>
-                            </div>
-                            <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${isPaperLow ? 'bg-rose-500' : paperPct < 30 ? 'bg-amber-500' : 'bg-emerald-500'
+                              {/* Toggle Switch */}
+                              <button
+                                type="button"
+                                onClick={() => handleTogglePaperTracking(kiosk)}
+                                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                  kiosk.paperTrackingEnabled ? 'bg-emerald-500' : 'bg-slate-700'
+                                }`}
+                                title={kiosk.paperTrackingEnabled ? 'Klik untuk nonaktifkan pelacakan kertas' : 'Klik untuk aktifkan pelacakan kertas'}
+                              >
+                                <span
+                                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                                    kiosk.paperTrackingEnabled ? 'translate-x-4' : 'translate-x-0'
                                   }`}
-                                style={{ width: `${Math.min(100, Math.max(0, paperPct))}%` }}
-                              />
+                                />
+                              </button>
                             </div>
-                            {isPaperLow && (
-                              <p className="text-[10px] text-rose-400 mt-1.5 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                <span>Kertas hampir habis! Segera isi ulang di lokasi.</span>
+
+                            {kiosk.paperTrackingEnabled ? (
+                              <>
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-[11px] text-slate-400">Sisa Lembar:</span>
+                                  <span className={`font-mono font-bold ${isPaperLow ? 'text-rose-400' : 'text-slate-200'}`}>
+                                    {kiosk.paperRemaining} / {kiosk.paperRollCapacity || 400} lbr ({paperPct}%)
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${
+                                      isPaperLow ? 'bg-rose-500' : paperPct < 30 ? 'bg-amber-500' : 'bg-emerald-500'
+                                    }`}
+                                    style={{ width: `${Math.min(100, Math.max(0, paperPct))}%` }}
+                                  />
+                                </div>
+                                {isPaperLow && (
+                                  <p className="text-[10px] text-rose-400 mt-1 flex items-center gap-1">
+                                    <AlertCircle className="w-3 h-3" />
+                                    <span>Kertas hampir habis! Segera isi ulang di lokasi.</span>
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className="text-[11px] text-slate-400 italic">
+                                Nonaktif (Default) — Booth dapat mencetak tanpa peringatan stok habis.
                               </p>
                             )}
                           </div>
@@ -2882,15 +3018,24 @@ export const PartnerPortal: React.FC = () => {
                         {/* Action buttons */}
                         <div className="space-y-2 pt-3 border-t border-slate-800/80">
                           <div className="grid grid-cols-2 gap-2">
-                            <button
-                              onClick={() => {
-                                setPaperModalKiosk(kiosk);
-                                setPaperInputSheets(String(kiosk.paperRemaining));
-                              }}
-                              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition-all text-center"
-                            >
-                              Isi Ulang Kertas
-                            </button>
+                            {kiosk.paperTrackingEnabled ? (
+                              <button
+                                onClick={() => {
+                                  setPaperModalKiosk(kiosk);
+                                  setPaperInputSheets(String(kiosk.paperRemaining));
+                                }}
+                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition-all text-center"
+                              >
+                                Isi Ulang Kertas
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleTogglePaperTracking(kiosk)}
+                                className="px-3 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition-all text-center"
+                              >
+                                Aktifkan Kertas
+                              </button>
+                            )}
 
                             <button
                               onClick={() => {
@@ -2907,14 +3052,25 @@ export const PartnerPortal: React.FC = () => {
                             </button>
                           </div>
 
-                          {/* Reset Booth / Bypass Sesi Macet Button */}
-                          <button
-                            onClick={() => setResetKioskTarget(kiosk)}
-                            className="w-full py-2 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                          >
-                            <Power className="w-3.5 h-3.5" />
-                            <span>Reset Booth / Sesi Macet</span>
-                          </button>
+                          {/* Akses Bypass Booth & Reset Sesi */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setBypassKioskTarget(kiosk)}
+                              className="py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 cursor-pointer"
+                              title="Loloskan sesi bayar aktif atau buat tiket PASS gratis untuk booth ini"
+                            >
+                              <Zap className="w-3.5 h-3.5 fill-current" />
+                              <span>Akses Bypass</span>
+                            </button>
+                            <button
+                              onClick={() => setResetKioskTarget(kiosk)}
+                              className="py-2 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                              title="Reset darurat booth ke layar awal"
+                            >
+                              <Power className="w-3.5 h-3.5" />
+                              <span>Reset Sesi</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -3599,7 +3755,7 @@ export const PartnerPortal: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* MODAL 2: RESET (BYPASS) BOOTH CONFIRMATION */}
+      {/* MODAL 2: RESET BOOTH CONFIRMATION */}
       <AnimatePresence>
         {resetKioskTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -3642,6 +3798,64 @@ export const PartnerPortal: React.FC = () => {
                 >
                   {isResettingKiosk ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
                   <span>Reset Sekarang</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL 2.5: BYPASS BOOTH CONFIRMATION */}
+      <AnimatePresence>
+        {bypassKioskTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-2xl p-6 shadow-2xl relative"
+            >
+              <button
+                onClick={() => setBypassKioskTarget(null)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-3 shadow-lg shadow-amber-500/10">
+                <Zap className="w-6 h-6 fill-current" />
+              </div>
+
+              <h3 className="text-base font-black text-white flex items-center gap-2">
+                <span>Bypass Jarak Jauh Booth</span>
+                <span className="font-mono text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                  {bypassKioskTarget.code}
+                </span>
+              </h3>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                Aksi ini akan memeriksa booth <strong className="text-white">[{bypassKioskTarget.code}] {bypassKioskTarget.name}</strong>:
+              </p>
+              <ul className="text-xs text-slate-400 mt-2 space-y-1.5 list-disc list-inside bg-slate-950/50 p-3 rounded-xl border border-slate-800">
+                <li><strong className="text-amber-300">Jika sedang di layar bayar:</strong> Sesi langsung diloloskan (settled) dan booth otomatis meluncur ke kamera countdown.</li>
+                <li><strong className="text-amber-300">Jika sedang di layar awal:</strong> Sistem otomatis menerbitkan <strong>Kode PASS Bypass (Gratis Rp 0)</strong> khusus untuk booth ini.</li>
+              </ul>
+
+              <div className="flex items-center gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setBypassKioskTarget(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-all cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmBypassKiosk}
+                  disabled={isBypassingKiosk}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-amber-500/20 cursor-pointer disabled:opacity-50"
+                >
+                  {isBypassingKiosk ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current" />}
+                  <span>{isBypassingKiosk ? 'Memproses...' : 'Eksekusi Bypass'}</span>
                 </button>
               </div>
             </motion.div>

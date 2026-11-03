@@ -93,7 +93,7 @@ export class SessionService {
   /**
    * Membuat sesi baru berdasarkan paket yang dipilih pelanggan
    */
-  async createSession(input: CreateSessionInput): Promise<SessionDto> {
+  async createSession(input: CreateSessionInput, callerKioskId?: string): Promise<SessionDto> {
     const settings = await this.prisma.settings.findFirst();
     if (settings?.maintenanceMode) {
       throw new AppError(
@@ -132,15 +132,21 @@ export class SessionService {
     }
     const sessionId = await this.sessionNameEngine.generateNextSessionId({ prefix: sessionPrefix });
 
-    // Temukan Kiosk ID jika booth memiliki API key terdaftar
-    let matchedKioskId: string | null = null;
-    try {
-      const apiKey = getEnv().BOOTH_API_KEY;
-      if (apiKey && apiKey !== 'dev-booth-key-for-testing') {
-        const kiosk = await this.prisma.kiosk.findUnique({ where: { apiKey } });
-        if (kiosk) matchedKioskId = kiosk.id;
-      }
-    } catch {}
+    // Temukan Kiosk ID jika diberikan oleh route / auth middleware atau jika booth memiliki API key terdaftar
+    let matchedKioskId: string | null = callerKioskId || null;
+    if (!matchedKioskId) {
+      try {
+        const apiKey = getEnv().BOOTH_API_KEY;
+        if (apiKey && apiKey !== 'dev-booth-key-for-testing') {
+          const kiosk = await this.prisma.kiosk.findUnique({ where: { apiKey } });
+          if (kiosk) matchedKioskId = kiosk.id;
+        }
+      } catch {}
+    }
+    if (!matchedKioskId) {
+      const firstKiosk = await this.prisma.kiosk.findFirst({ select: { id: true } }).catch(() => null);
+      if (firstKiosk) matchedKioskId = firstKiosk.id;
+    }
 
     const session = await this.prisma.session.create({
       data: {
@@ -261,14 +267,33 @@ export class SessionService {
       },
     });
 
-    // Kurangi sisa kertas di booth secara otomatis sesuai lembar fisik yang dicetak
-    if (existing.kioskId && input.photosPrinted > 0) {
-      await this.prisma.kiosk.update({
-        where: { id: existing.kioskId },
-        data: {
-          paperRemaining: { decrement: input.photosPrinted },
-        },
-      }).catch(() => {});
+    // Kurangi sisa kertas di booth HANYA JIKA pelacakan kertas diaktifkan oleh Mitra (Default: OFF)
+    if (existing.kioskId) {
+      try {
+        const kiosk = await this.prisma.kiosk.findUnique({
+          where: { id: existing.kioskId },
+          select: { id: true, disabledPackageIds: true, paperRemaining: true },
+        });
+
+        const isPaperTrackingEnabled = Boolean(
+          kiosk &&
+          Array.isArray(kiosk.disabledPackageIds) &&
+          kiosk.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__')
+        );
+
+        if (isPaperTrackingEnabled) {
+          const printsToDeduct = (input.photosPrinted !== undefined && input.photosPrinted > 0)
+            ? input.photosPrinted
+            : (existing.totalPrints || 1);
+
+          await this.prisma.kiosk.update({
+            where: { id: existing.kioskId },
+            data: {
+              paperRemaining: { decrement: printsToDeduct },
+            },
+          });
+        }
+      } catch {}
     }
 
     return this.mapToDto(updated);

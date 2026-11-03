@@ -33,6 +33,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { photoboothApi } from '../../services/photoboothApi';
+import { isJwtExpired } from '../../services/httpPhotoboothApi';
 import { RecentSessionItem, AccessCodeItem } from '../../types/api';
 import { PackageItem } from '../../types/package';
 import { QRCodeCanvas } from '../../components/common/QRCodeCanvas';
@@ -40,7 +41,13 @@ import { QRCodeCanvas } from '../../components/common/QRCodeCanvas';
 export const OperatorPortal: React.FC = () => {
   // Auth states
   const [operatorToken, setOperatorToken] = useState<string | null>(() => {
-    return localStorage.getItem('minja_operator_token');
+    const saved = localStorage.getItem('minja_operator_token');
+    if (saved && !isJwtExpired(saved)) {
+      return saved;
+    }
+    localStorage.removeItem('minja_operator_token');
+    localStorage.removeItem('minja_operator_info');
+    return null;
   });
   const [operatorInfo, setOperatorInfo] = useState<any | null>(() => {
     const saved = localStorage.getItem('minja_operator_info');
@@ -61,7 +68,7 @@ export const OperatorPortal: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Tangkap event 401 Unauthorized secara terpusat untuk cegah loop saat token kasir expired
+  // Tangkap event 401 Unauthorized secara terpusat & watchdog kedaluwarsa JWT proaktif
   useEffect(() => {
     const handleUnauthorized = () => {
       localStorage.removeItem('minja_operator_token');
@@ -70,8 +77,24 @@ export const OperatorPortal: React.FC = () => {
       setOperatorInfo(null);
       setLoginError('Sesi kasir telah kedaluwarsa. Silakan login kembali.');
     };
+
     window.addEventListener('minja:unauthorized', handleUnauthorized);
-    return () => window.removeEventListener('minja:unauthorized', handleUnauthorized);
+
+    const checkTokenExpiry = () => {
+      const saved = localStorage.getItem('minja_operator_token');
+      if (saved && isJwtExpired(saved)) {
+        handleUnauthorized();
+      }
+    };
+
+    const intervalId = setInterval(checkTokenExpiry, 30000);
+    window.addEventListener('visibilitychange', checkTokenExpiry);
+
+    return () => {
+      window.removeEventListener('minja:unauthorized', handleUnauthorized);
+      clearInterval(intervalId);
+      window.removeEventListener('visibilitychange', checkTokenExpiry);
+    };
   }, []);
 
   // Shift summary state
@@ -543,20 +566,31 @@ export const OperatorPortal: React.FC = () => {
 
         <div className="flex items-center gap-2 md:gap-3">
           {/* Paper Remaining Indicator with Quick Adjust */}
-          <button
-            onClick={() => {
-              setManualPaperInput(String(paperRemaining));
-              setShowPaperModal(true);
-            }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-xs transition"
-            title="Klik untuk update jumlah fisik sisa kertas"
-          >
-            <Printer className="w-3.5 h-3.5 text-sky-400" />
-            <span className="text-slate-400 hidden sm:inline">Kertas:</span>
-            <span className={`font-mono font-bold ${isLowPaper ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}`}>
-              {paperRemaining} lbr ({paperPct}%)
-            </span>
-          </button>
+          {kioskStatus?.paperTrackingEnabled ? (
+            <button
+              onClick={() => {
+                setManualPaperInput(String(paperRemaining));
+                setShowPaperModal(true);
+              }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-xs transition"
+              title="Klik untuk update jumlah fisik sisa kertas"
+            >
+              <Printer className="w-3.5 h-3.5 text-sky-400" />
+              <span className="text-slate-400 hidden sm:inline">Kertas:</span>
+              <span className={`font-mono font-bold ${isLowPaper ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}`}>
+                {paperRemaining} lbr ({paperPct}%)
+              </span>
+            </button>
+          ) : (
+            <div
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/5 text-xs text-slate-400"
+              title="Pelacakan sisa kertas dinonaktifkan oleh Mitra"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-500" />
+              <span className="hidden sm:inline text-slate-500">Kertas:</span>
+              <span className="font-medium text-slate-400">Bebas Cetak</span>
+            </div>
+          )}
 
           <button
             onClick={fetchAllOperatorData}
@@ -661,7 +695,7 @@ export const OperatorPortal: React.FC = () => {
           </div>
         )}
 
-        {paperRemaining <= 30 && (
+        {Boolean(kioskStatus?.paperTrackingEnabled && paperRemaining <= 30) && (
           <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs flex items-center justify-between shadow-lg">
             <div className="flex items-center gap-2.5">
               <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />

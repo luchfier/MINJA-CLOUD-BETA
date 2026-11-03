@@ -75,8 +75,8 @@ export class GalleryProgressEngine {
       } catch {}
     }
 
-    // Grace period video: 12 detik jika frame cetak sudah ada
-    const isVideoGracePeriodPassed = sessionAgeMs >= 12000;
+    // Grace period video & rendering: 45 detik (memberi waktu aman bagi booth untuk transcode & upload)
+    const isVideoGracePeriodPassed = sessionAgeMs >= 45000;
 
     // Skenario 1: Belum ada file yang terunggah sama sekali
     if (items.length === 0) {
@@ -109,7 +109,7 @@ export class GalleryProgressEngine {
     }
 
     // Skenario 2: Foto studio sudah masuk, namun bingkai belum ada
-    if (hasPhotos && !hasFrames && !hasVideos) {
+    if (hasPhotos && !hasFrames && !hasVideos && !isVideoGracePeriodPassed) {
       const photoBonus = Math.min(rawPhotos.length * 5, 20);
       return {
         sessionId,
@@ -139,8 +139,8 @@ export class GalleryProgressEngine {
       };
     }
 
-    // Skenario 3: Bingkai sudah ada, sedang menunggu video transcode (dalam batas grace period 12 detik)
-    if ((hasFrames || hasPhotos) && !hasVideos && !isVideoGracePeriodPassed) {
+    // Skenario 3: Bingkai sudah ada, sedang menunggu video transcode (dalam batas grace period 45 detik)
+    if (hasFrames && !hasVideos && !isVideoGracePeriodPassed) {
       return {
         sessionId,
         status: 'processing',
