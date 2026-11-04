@@ -72,9 +72,4 @@ export const updateSettingsSchema = z.object({
   pageBuilderLanding: z.any().optional(),
   pageBuilderGallery: z.any().optional(),
   customCss: z.string().nullable().optional(),
-  welcomeAnimationType: z.string().nullable().optional(),
-  welcomeMusicEnabled: z.boolean().optional(),
-  welcomeMusicVolume: z.number().int().min(0).max(100).optional(),
-  welcomeMusicPreset: z.string().nullable().optional(),
-  welcomeMusicCustomUrl: z.string().nullable().optional(),
 }).passthrough();

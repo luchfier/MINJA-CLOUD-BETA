@@ -28,11 +28,6 @@ export interface PublicBrandingConfig {
   pageBuilderLanding?: import('./pageBuilder').PageBuilderLandingConfig;
   pageBuilderGallery?: import('./pageBuilder').PageBuilderGalleryConfig;
   customCss?: string;
-  welcomeAnimationType?: 'floating-sparkles' | 'aurora-glow' | 'minimalist' | 'none';
-  welcomeMusicEnabled?: boolean;
-  welcomeMusicVolume?: number;
-  welcomeMusicPreset?: 'lofi-chill' | 'studio-ambient' | 'party-upbeat' | 'custom';
-  welcomeMusicCustomUrl?: string;
   footerFeature1?: string;
   footerFeature2?: string;
   footerFeature3?: string;

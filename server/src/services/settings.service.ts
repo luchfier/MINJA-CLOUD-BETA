@@ -296,11 +296,6 @@ export class SettingsService {
       ...(sanitizedData.footerFeature2 !== undefined && { footerFeature2: sanitizedData.footerFeature2 }),
       ...(sanitizedData.footerFeature3 !== undefined && { footerFeature3: sanitizedData.footerFeature3 }),
       ...(sanitizedData.footerTouchPrompt !== undefined && { footerTouchPrompt: sanitizedData.footerTouchPrompt }),
-      ...(sanitizedData.welcomeAnimationType !== undefined && { welcomeAnimationType: sanitizedData.welcomeAnimationType }),
-      ...(sanitizedData.welcomeMusicEnabled !== undefined && { welcomeMusicEnabled: sanitizedData.welcomeMusicEnabled }),
-      ...(sanitizedData.welcomeMusicVolume !== undefined && { welcomeMusicVolume: sanitizedData.welcomeMusicVolume }),
-      ...(sanitizedData.welcomeMusicPreset !== undefined && { welcomeMusicPreset: sanitizedData.welcomeMusicPreset }),
-      ...(sanitizedData.welcomeMusicCustomUrl !== undefined && { welcomeMusicCustomUrl: sanitizedData.welcomeMusicCustomUrl }),
     };
 
     // Filter agar HANYA kolom prisma resmi yang dimasukkan ke query prisma.settings.update

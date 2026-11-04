@@ -122,11 +122,6 @@ const DEFAULT_PUBLIC_BRANDING: PublicBrandingConfig = {
   promoSubheadline:
     'Hadirkan keseruan tanpa batas di pesta Anda dengan cetak foto lab studio 10×15 cm unlimited, desain frame kustom nama pengantin / logo acara, properti foto, dan crew ramah yang siap memeriahkan pesta Anda.',
   livePhotoEnabled: true,
-  welcomeAnimationType: 'floating-sparkles',
-  welcomeMusicEnabled: false,
-  welcomeMusicVolume: 40,
-  welcomeMusicPreset: 'lofi-chill',
-  welcomeMusicCustomUrl: '',
   footerFeature1: 'Kamera Studio High Definition',
   footerFeature2: 'Foto Jernih & Langsung Jadi ✨',
   footerFeature3: 'Soft File QR & Email Otomatis',
