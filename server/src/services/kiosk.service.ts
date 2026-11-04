@@ -452,6 +452,7 @@ export class KioskService {
       kioskId: updated.id,
       code: updated.code,
       name: updated.name,
+      location: updated.location,
       isLocked: updated.isLocked,
       lockReason: updated.lockReason,
       pendingPrintCommands: pendingCommands,
