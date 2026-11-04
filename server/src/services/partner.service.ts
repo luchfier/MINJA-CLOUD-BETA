@@ -1791,7 +1791,7 @@ export class PartnerService {
           package: { select: { id: true, name: true, price: true } },
           kiosk: { select: { id: true, code: true, name: true } },
           gallery: { select: { id: true, token: true, expiresAt: true } },
-          deliveryJobs: { select: { id: true, recipient: true, status: true, deliveryType: true } },
+          deliveryJobs: { select: { id: true, email: true, status: true, channel: true } },
         },
       }),
     ]);
@@ -1811,7 +1811,7 @@ export class PartnerService {
       state: s.state,
       hasGallery: !!s.gallery,
       galleryToken: s.gallery?.token || null,
-      emailDeliveryStatus: s.deliveryJobs.find((d) => d.deliveryType === 'email')?.status || null,
+      emailDeliveryStatus: s.deliveryJobs.find((d) => d.channel === 'email')?.status || null,
       createdAt: s.createdAt.toISOString(),
       completedAt: s.completedAt ? s.completedAt.toISOString() : null,
     }));
