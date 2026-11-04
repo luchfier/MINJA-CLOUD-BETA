@@ -260,12 +260,39 @@ export class SessionService {
         shotsTaken: input.shotsTaken,
         photosSelected: input.photosSelected,
         photosPrinted: input.photosPrinted,
+        ...(input.templateId ? { templateId: input.templateId } : {}),
       },
       include: {
         package: true,
         payments: true,
       },
     });
+
+    if (input.finalPhotoUrl) {
+      await this.prisma.photo.upsert({
+        where: {
+          sessionId_shotNumber: {
+            sessionId: id,
+            shotNumber: 1,
+          },
+        },
+        create: {
+          sessionId: id,
+          shotNumber: 1,
+          localFilePath: '',
+          originalFilename: 'design_1.jpg',
+          fileSizeBytes: 0,
+          width: 1200,
+          height: 1800,
+          mimeType: 'image/jpeg',
+          storageUrl: input.finalPhotoUrl,
+          isSelected: true,
+        },
+        update: {
+          storageUrl: input.finalPhotoUrl,
+        },
+      }).catch((e) => console.warn('[SessionService] Gagal upsert photo record:', e));
+    }
 
     // Kurangi sisa kertas di booth HANYA JIKA pelacakan kertas diaktifkan oleh Mitra (Default: OFF)
     if (existing.kioskId) {

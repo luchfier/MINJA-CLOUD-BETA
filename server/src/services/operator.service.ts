@@ -437,8 +437,11 @@ export class OperatorService {
       },
     });
 
+    const r2Domain = (process.env.R2_PUBLIC_DOMAIN || 'https://tampung.minja.my.id').replace(/\/+$/, '');
+
     return sessions.map((s) => {
-      const printUrl = s.photos[0]?.storageUrl || null;
+      const defaultR2Photo = `${r2Domain}/${encodeURIComponent(s.id)}/design_1.jpg`;
+      const photoUrl = s.photos[0]?.storageUrl || defaultR2Photo;
       const payment = s.payments?.[0];
       const totalAmount = s.totalPrice || s.basePrice || payment?.grossAmount || 0;
       const orderId = payment?.orderId || s.id.slice(-8).toUpperCase();
@@ -453,8 +456,8 @@ export class OperatorService {
         packageName: s.package?.name || 'Paket Standar',
         templateName: s.template?.name || 'Template Standar',
         templateThumbnail: s.template?.thumbnailUrl || null,
-        printPreviewUrl: printUrl,
-        finalPhotoUrl: s.photos[0]?.storageUrl || null,
+        printPreviewUrl: photoUrl,
+        finalPhotoUrl: photoUrl,
         totalPrints: s.totalPrints,
         photosPrinted: s.photosPrinted,
         createdAt: s.createdAt.toISOString(),
@@ -504,6 +507,10 @@ export class OperatorService {
     const finalReason = reason || `Reprint darurat oleh kasir: ${operator.name}`;
     const kioskToDecrement = session.kioskId || targetKioskId;
 
+    const r2Domain = (process.env.R2_PUBLIC_DOMAIN || 'https://tampung.minja.my.id').replace(/\/+$/, '');
+    const defaultR2Photo = `${r2Domain}/${encodeURIComponent(sessionId)}/design_1.jpg`;
+    const photoToPrint = (session as any).photos?.[0]?.storageUrl || defaultR2Photo;
+
     // Daftarkan ke Remote Print Queue agar komputer booth fisik mengeksekusi via Heartbeat
     if (kioskToDecrement) {
       KioskService.queuePrintCommand(kioskToDecrement, {
@@ -512,6 +519,7 @@ export class OperatorService {
         copies: finalCopies,
         reason: finalReason,
         requestedBy: operator.name,
+        layoutImageUrl: photoToPrint,
         createdAt: new Date().toISOString(),
       });
       humanLogger.success('REPRINT', `Perintah cetak ulang sesi ${sessionId} (${finalCopies} lembar) berhasil didaftarkan ke antrean booth [${kioskToDecrement}].`);

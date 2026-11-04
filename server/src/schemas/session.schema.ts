@@ -33,6 +33,8 @@ export const completeSessionSchema = z.object({
   shotsTaken: z.number().int().min(0).default(0),
   photosSelected: z.number().int().min(0).default(0),
   photosPrinted: z.number().int().min(0).default(0),
+  templateId: z.string().optional(),
+  finalPhotoUrl: z.string().optional(),
 });
 
 export const cancelSessionSchema = z.object({

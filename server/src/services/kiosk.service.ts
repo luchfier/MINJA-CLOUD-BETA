@@ -39,6 +39,7 @@ export interface PendingPrintCommand {
   reason: string;
   requestedBy: string;
   createdAt: string;
+  layoutImageUrl?: string;
 }
 
 export interface KioskItemDto {

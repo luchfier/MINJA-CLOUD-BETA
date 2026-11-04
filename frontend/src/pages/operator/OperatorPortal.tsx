@@ -1310,13 +1310,25 @@ export const OperatorPortal: React.FC = () => {
                             alt="Hasil Sesi"
                             className="w-full h-full object-contain"
                             loading="lazy"
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              if (session.templateThumbnail && target.src !== session.templateThumbnail) {
+                                target.src = session.templateThumbnail;
+                              } else {
+                                target.style.display = 'none';
+                                const fallbackEl = target.parentElement?.querySelector('.fallback-placeholder');
+                                if (fallbackEl) (fallbackEl as HTMLElement).style.display = 'flex';
+                              }
+                            }}
                           />
-                        ) : (
-                          <div className="flex flex-col items-center text-slate-500 text-xs gap-1">
-                            <FileImage className="w-8 h-8 opacity-40" />
-                            <span>Soft file di server</span>
-                          </div>
-                        )}
+                        ) : null}
+                        <div
+                          className="fallback-placeholder flex-col items-center text-slate-500 text-xs gap-1"
+                          style={{ display: (session.finalPhotoUrl || session.printPreviewUrl || session.templateThumbnail) ? 'none' : 'flex' }}
+                        >
+                          <FileImage className="w-8 h-8 opacity-40" />
+                          <span>Soft file di server</span>
+                        </div>
                         <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-slate-950/80 backdrop-blur-md text-[10px] font-mono text-amber-300 font-bold border border-white/10">
                           {session.packageName || 'Paket Foto'}
                         </span>
@@ -1709,6 +1721,14 @@ export const OperatorPortal: React.FC = () => {
                     src={(selectedSessionForReprint.finalPhotoUrl || selectedSessionForReprint.printPreviewUrl || selectedSessionForReprint.templateThumbnail) as string}
                     alt="Preview"
                     className="w-full h-full object-contain"
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      if (selectedSessionForReprint.templateThumbnail && target.src !== selectedSessionForReprint.templateThumbnail) {
+                        target.src = selectedSessionForReprint.templateThumbnail;
+                      } else {
+                        target.style.display = 'none';
+                      }
+                    }}
                   />
                 </div>
               )}
