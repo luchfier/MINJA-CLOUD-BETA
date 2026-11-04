@@ -4,7 +4,6 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { OwnerService } from '../services/owner.service.js';
-import { PrintService } from '../services/print.service.js';
 import { AccessCodeService } from '../services/accessCode.service.js';
 import { VoucherService } from '../services/voucher.service.js';
 import { TransactionEngineService } from '../services/transactionEngine.service.js';
@@ -12,8 +11,7 @@ import { AdminAuthService } from '../services/admin-auth.service.js';
 import { requireAdminAuth } from '../middleware/auth.middleware.js';
 
 export const ownerRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
-  const printService = new PrintService(app.prisma);
-  const ownerService = new OwnerService(app.prisma, app.syncQueueService, printService);
+  const ownerService = new OwnerService(app.prisma, app.syncQueueService);
   const accessCodeService = new AccessCodeService(app.prisma);
   const voucherService = new VoucherService(app.prisma);
   const transactionEngine = new TransactionEngineService(app.prisma);
@@ -190,12 +188,13 @@ export const ownerRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.put('/api/owner/tunnel', handlePostTunnelStatus);
 
   // 8. POST /api/owner/actions/test-print
-  // Jalankan test print dari jarak jauh
+  // Jalankan test print dari jarak jauh via antrean remote kiosk
   app.post(
     '/api/owner/actions/test-print',
     { preHandler: [requireAdminAuth] },
     async (req, reply) => {
-      const res = await printService.testPrint((req.body as any) || {});
+      const body = (req.body as any) || {};
+      const res = await ownerService.triggerTestPrint(body.kioskId);
       return reply.send({
         success: true,
         data: res,

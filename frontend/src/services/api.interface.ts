@@ -107,18 +107,6 @@ export interface IPhotoboothApi {
     height: number;
     error?: string;
   }>>;
-  renderNativePhoto?(payload: any): Promise<ApiResponse<{
-    success: boolean;
-    printFilePath: string;
-    webUrl: string;
-    galleryUrl: string;
-    thumbnailUrl: string;
-    width: number;
-    height: number;
-    dpi: number;
-    sizeBytes: number;
-    processingTimeMs: number;
-  }>>;
 
   // Admin Endpoints
   loginAdmin(pin: string): Promise<ApiResponse<{ token: string; expiresIn: number }>>;

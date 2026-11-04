@@ -5,7 +5,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { SyncQueueService } from './syncQueue.service.js';
 import { cleanupService } from './cleanup.service.js';
-import { PrintService } from './print.service.js';
 import { StorageService } from './storage.service.js';
 import { EmailService } from './email.service.js';
 import { formatSessionCode } from '../utils/session.util.js';
@@ -102,8 +101,7 @@ export class OwnerService {
 
   constructor(
     private prisma: PrismaClient,
-    private syncQueueService: SyncQueueService,
-    private printService: PrintService
+    private syncQueueService: SyncQueueService
   ) {
     let publicUrl = '';
     try {
@@ -246,11 +244,13 @@ export class OwnerService {
     const paperRollCapacity = 400;
     const estimatedPaperRemaining = Math.max(0, paperRollCapacity - (totalPrints % paperRollCapacity));
 
-    // 5. Hardware Status
+    // 5. Hardware Status (telemetri printer dari armada booth online)
     let detectedPrintersCount = 0;
     try {
-      const printers = await this.printService.listPrinters();
-      detectedPrintersCount = printers.length;
+      const activePrinterKiosks = await this.prisma.kiosk.count({
+        where: { printerStatus: 'READY' },
+      });
+      detectedPrintersCount = activePrinterKiosks;
     } catch { }
 
     // 6. Sync Queue Status
@@ -460,6 +460,25 @@ export class OwnerService {
   public async triggerCleanup(): Promise<{ deleted: number; freedBytes: number }> {
     humanLogger.cleanup('🧹 Owner memicu Pembersihan Disk dari jarak jauh');
     return cleanupService.cleanOldPrintFiles(2);
+  }
+
+  /**
+   * Mendaftarkan perintah uji cetak ke antrean kiosk
+   */
+  public async triggerTestPrint(kioskId?: string): Promise<{ success: boolean; message: string }> {
+    if (kioskId) {
+      const { KioskService } = await import('./kiosk.service.js');
+      KioskService.queuePrintCommand(kioskId, {
+        id: `test_print_${Date.now()}`,
+        sessionId: 'TEST_PRINT',
+        copies: 1,
+        reason: 'Test print dari Owner Portal',
+        requestedBy: 'Owner',
+        createdAt: new Date().toISOString(),
+      });
+      return { success: true, message: `Perintah test print berhasil didaftarkan ke antrean booth [${kioskId}].` };
+    }
+    return { success: true, message: 'Test print acknowledge (pilih kiosk tujuan untuk cetak fisik).' };
   }
 
   /**

@@ -292,10 +292,6 @@ export class SettingsService {
       ...(sanitizedData.logoHeight !== undefined && { logoHeight: sanitizedData.logoHeight }),
       ...(sanitizedData.glassmorphismIntensity !== undefined && { glassmorphismIntensity: sanitizedData.glassmorphismIntensity }),
       ...(sanitizedData.enableVignette !== undefined && { enableVignette: sanitizedData.enableVignette }),
-      ...(sanitizedData.footerFeature1 !== undefined && { footerFeature1: sanitizedData.footerFeature1 }),
-      ...(sanitizedData.footerFeature2 !== undefined && { footerFeature2: sanitizedData.footerFeature2 }),
-      ...(sanitizedData.footerFeature3 !== undefined && { footerFeature3: sanitizedData.footerFeature3 }),
-      ...(sanitizedData.footerTouchPrompt !== undefined && { footerTouchPrompt: sanitizedData.footerTouchPrompt }),
     };
 
     // Filter agar HANYA kolom prisma resmi yang dimasukkan ke query prisma.settings.update
@@ -325,8 +321,6 @@ export class SettingsService {
       'emailDeliveryEnabled',
       'galleryEnabled',
       'livePhotoEnabled',
-      'selectedCameraId',
-      'selectedPrinterName',
     ]);
 
     const prismaData: Record<string, any> = {};

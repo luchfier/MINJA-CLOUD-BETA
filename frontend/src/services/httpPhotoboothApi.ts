@@ -122,10 +122,6 @@ const DEFAULT_PUBLIC_BRANDING: PublicBrandingConfig = {
   promoSubheadline:
     'Hadirkan keseruan tanpa batas di pesta Anda dengan cetak foto lab studio 10×15 cm unlimited, desain frame kustom nama pengantin / logo acara, properti foto, dan crew ramah yang siap memeriahkan pesta Anda.',
   livePhotoEnabled: true,
-  footerFeature1: 'Kamera Studio High Definition',
-  footerFeature2: 'Foto Jernih & Langsung Jadi ✨',
-  footerFeature3: 'Soft File QR & Email Otomatis',
-  footerTouchPrompt: 'Sentuh layar di mana saja untuk memulai',
 };
 
 // Fallback template frame kosong jika backend belum memuat template
@@ -773,120 +769,6 @@ class HttpPhotoboothApi implements IPhotoboothApi {
     } catch (e: any) {
       console.warn('[HttpApi] Gagal memproses Slideshow via backend:', e);
       return errResponse('NETWORK_ERROR', e?.message || 'Koneksi backend gagal');
-    }
-  }
-
-  private async resolveBlobToDataUrl(url: string): Promise<string> {
-    if (!url || typeof url !== 'string' || !url.startsWith('blob:')) {
-      return url;
-    }
-    try {
-      const res = await apiFetch(url);
-      if (!res.ok) return url;
-      const blob = await res.blob();
-      return await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') {
-            resolve(reader.result);
-          } else {
-            resolve(url);
-          }
-        };
-        reader.onerror = () => resolve(url);
-        reader.readAsDataURL(blob);
-      });
-    } catch (err) {
-      console.warn('[HttpApi] Gagal mengonversi blob URL ke Data URL:', err);
-      return url;
-    }
-  }
-
-  async renderNativePhoto(payload: any): Promise<ApiResponse<{
-    success: boolean;
-    printFilePath: string;
-    webUrl: string;
-    galleryUrl: string;
-    thumbnailUrl: string;
-    width: number;
-    height: number;
-    dpi: number;
-    sizeBytes: number;
-    processingTimeMs: number;
-  }>> {
-    try {
-      // 1. Konversi semua URL foto blob: ke base64 Data URL agar Node.js backend bisa membaca buffer fisiknya
-      const resolvedPhotoUrls = payload.photoUrls && Array.isArray(payload.photoUrls)
-        ? await Promise.all(payload.photoUrls.map((u: string) => this.resolveBlobToDataUrl(u)))
-        : payload.photoUrls;
-
-      // 2. Konversi stiker blob: ke base64 jika ada
-      let resolvedStickers = payload.stickers;
-      if (Array.isArray(payload.stickers)) {
-        resolvedStickers = await Promise.all(
-          payload.stickers.map(async (st: any) => ({
-            ...st,
-            url: await this.resolveBlobToDataUrl(st.url),
-          }))
-        );
-      }
-
-      // 3. Konversi template frameUrl jika bertipe blob:
-      let resolvedTemplate = payload.template;
-      if (payload.template && payload.template.frameUrl) {
-        resolvedTemplate = {
-          ...payload.template,
-          frameUrl: await this.resolveBlobToDataUrl(payload.template.frameUrl),
-        };
-      }
-
-      const nativePayload = {
-        ...payload,
-        template: resolvedTemplate,
-        photoUrls: resolvedPhotoUrls,
-        stickers: resolvedStickers,
-      };
-
-      // Prioritas 1: Jika berjalan di lingkungan Desktop Electron Kiosk, gunakan Direct IPC Bridge!
-      if (typeof window !== 'undefined' && window.electronNativeRenderer?.renderPhoto) {
-        try {
-          const ipcRes = await window.electronNativeRenderer.renderPhoto(nativePayload);
-          if (ipcRes?.success && ipcRes?.data) {
-            return {
-              success: true,
-              data: ipcRes.data,
-              timestamp: new Date().toISOString(),
-            };
-          }
-          if (ipcRes && !ipcRes.success) {
-            console.warn('[HttpApi] Direct Electron IPC render gagal, mencoba fallback ke HTTP:', ipcRes.error);
-          }
-        } catch (ipcErr) {
-          console.warn('[HttpApi] Exception saat Direct Electron IPC render, mencoba fallback HTTP:', ipcErr);
-        }
-      }
-
-      // Prioritas 2 (HTTP REST Fallback untuk Dev Browser Preview):
-      const res = await apiFetch(`${API_BASE}/renderer/render-photo`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Booth-Key': BOOTH_KEY,
-        },
-        body: JSON.stringify(nativePayload),
-      });
-      const json = await res.json().catch(() => null);
-      if (res.ok && json?.success && json?.data) {
-        return {
-          success: true,
-          data: json.data,
-          timestamp: json.timestamp || new Date().toISOString(),
-        };
-      }
-      return errResponse('RENDER_FAILED', json?.error?.message || 'Gagal render foto native di backend');
-    } catch (e: any) {
-      console.warn('[HttpApi] Gagal memanggil native renderer server:', e);
-      return errResponse('NETWORK_ERROR', e?.message || 'Koneksi native renderer gagal');
     }
   }
 

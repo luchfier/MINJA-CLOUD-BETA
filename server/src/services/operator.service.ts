@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url';
 import { AppError, ErrorCode } from '../types/common.types.js';
 import { verifyPin, signCustomToken } from '../utils/auth.util.js';
 import { AccessCodeService } from './accessCode.service.js';
-import { PrintService } from './print.service.js';
 import { KioskService } from './kiosk.service.js';
 import { humanLogger } from '../utils/humanLogger.js';
 
@@ -27,13 +26,9 @@ export interface GeneratePassInput {
 
 export class OperatorService {
   private accessCodeService: AccessCodeService;
-  private printService: PrintService;
-  private printStorageDir: string;
 
   constructor(private prisma: PrismaClient) {
     this.accessCodeService = new AccessCodeService(prisma);
-    this.printService = new PrintService(prisma);
-    this.printStorageDir = path.resolve(__dirname, '../../storage/prints');
   }
 
   /**
@@ -442,17 +437,8 @@ export class OperatorService {
       },
     });
 
-    // Periksa apakah file print jpg tersedia di disk
-    let diskFiles: string[] = [];
-    try {
-      if (fs.existsSync(this.printStorageDir)) {
-        diskFiles = fs.readdirSync(this.printStorageDir);
-      }
-    } catch { }
-
     return sessions.map((s) => {
-      const matchingFile = diskFiles.find((f) => f.startsWith(s.id) && f.endsWith('.jpg'));
-      const printUrl = matchingFile ? `/storage/prints/${matchingFile}` : (s.photos[0]?.storageUrl || null);
+      const printUrl = s.photos[0]?.storageUrl || null;
       const payment = s.payments?.[0];
       const totalAmount = s.totalPrice || s.basePrice || payment?.grossAmount || 0;
       const orderId = payment?.orderId || s.id.slice(-8).toUpperCase();
@@ -531,11 +517,11 @@ export class OperatorService {
       humanLogger.success('REPRINT', `Perintah cetak ulang sesi ${sessionId} (${finalCopies} lembar) berhasil didaftarkan ke antrean booth [${kioskToDecrement}].`);
     }
 
-    const result = await this.printService.reprintJob({
-      sessionId,
-      copies: finalCopies,
-      reason: finalReason,
-    });
+    const result = {
+      jobId: `remote_reprint_${sessionId}_${Date.now()}`,
+      status: 'queued',
+      message: `Perintah cetak ulang sesi ${sessionId} (${finalCopies} lembar) berhasil didaftarkan ke antrean booth.`,
+    };
 
     // Kurangi estimasi sisa kertas booth jika berhasil dan jika pelacakan kertas diaktifkan
     if (kioskToDecrement) {
