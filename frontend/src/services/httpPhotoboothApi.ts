@@ -545,12 +545,12 @@ class HttpPhotoboothApi implements IPhotoboothApi {
               thumbnailUrl: t.thumbnailUrl || '',
               frameUrl: t.frameOverlayUrl || '',
               frameLayer: (t.frameLayer === 'underlay' ? 'underlay' : 'overlay') as 'overlay' | 'underlay',
-              layoutType: t.layoutType || (t.orientation === 'landscape' ? '4R_LANDSCAPE' : '4R_PORTRAIT'),
+              layoutType: 'PORTRAIT',
               category: (t.category === 'single' || t.category === 'grid')
                 ? t.category
                 : ((Array.isArray(slotsArray) ? slotsArray.length : (t.slotsCount || 1)) === 1 ? 'single' : 'grid'),
-              width: t.width || (t.orientation === 'landscape' ? 1800 : 1200),
-              height: t.height || (t.orientation === 'landscape' ? 1200 : 1800),
+              width: 1200,
+              height: 1800,
               isActive: t.isActive ?? true,
               isDefault: idx === 0,
               slots: Array.isArray(slotsArray)
@@ -1085,10 +1085,10 @@ class HttpPhotoboothApi implements IPhotoboothApi {
           thumbnailUrl: t.thumbnailUrl || '',
           frameUrl: t.frameOverlayUrl || '',
           frameLayer: (t.frameLayer === 'underlay' ? 'underlay' : 'overlay') as 'overlay' | 'underlay',
-          layoutType: t.layoutType || (t.orientation === 'landscape' ? '4R_LANDSCAPE' : '4R_PORTRAIT'),
+          layoutType: 'PORTRAIT',
           category: (t.category === 'single' || t.category === 'grid') ? t.category : ((t.slotsCount || 1) === 1 ? 'single' : 'grid'),
-          width: t.width || (t.orientation === 'landscape' ? 1800 : 1200),
-          height: t.height || (t.orientation === 'landscape' ? 1200 : 1800),
+          width: 1200,
+          height: 1800,
           isActive: t.isActive ?? true,
           isDefault: idx === 0,
           slots: (() => {
@@ -1120,7 +1120,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async createTemplate(token: string, tpl: Omit<TemplateItem, 'id'>): Promise<ApiResponse<TemplateItem>> {
     try {
-      const orientation = tpl.layoutType === '4R_LANDSCAPE' ? 'landscape' : 'portrait';
+      const orientation = 'portrait';
       const category = (tpl.category === 'single' || tpl.category === 'grid')
         ? tpl.category
         : (tpl.slots.length === 1 ? 'single' : 'grid');
@@ -1154,10 +1154,10 @@ class HttpPhotoboothApi implements IPhotoboothApi {
           thumbnailUrl: t.thumbnailUrl,
           frameUrl: t.frameOverlayUrl,
           frameLayer: (t.frameLayer || frameLayer) as 'overlay' | 'underlay',
-          layoutType: t.layoutType || (orientation === 'landscape' ? '4R_LANDSCAPE' : '4R_PORTRAIT'),
+          layoutType: 'PORTRAIT',
           category,
-          width: t.width || tpl.width || (orientation === 'landscape' ? 1800 : 1200),
-          height: t.height || tpl.height || (orientation === 'landscape' ? 1200 : 1800),
+          width: 1200,
+          height: 1800,
           isActive: t.isActive,
           isDefault: tpl.isDefault ?? false,
           slots: tpl.slots,
@@ -1173,7 +1173,6 @@ class HttpPhotoboothApi implements IPhotoboothApi {
 
   async updateTemplate(token: string, id: string, tpl: Partial<TemplateItem>): Promise<ApiResponse<TemplateItem>> {
     try {
-      const orientation = tpl.layoutType === '4R_LANDSCAPE' ? 'landscape' : 'portrait';
       const category = (tpl.category === 'single' || tpl.category === 'grid')
         ? tpl.category
         : (tpl.slots ? (tpl.slots.length === 1 ? 'single' : 'grid') : undefined);
@@ -1188,7 +1187,7 @@ class HttpPhotoboothApi implements IPhotoboothApi {
           name: tpl.name,
           thumbnailUrl: tpl.thumbnailUrl,
           frameOverlayUrl: tpl.frameUrl,
-          orientation: tpl.layoutType ? orientation : undefined,
+          orientation: 'portrait',
           category,
           frameLayer: tpl.frameLayer,
           slotsCount: tpl.slots ? tpl.slots.length : undefined,
@@ -1205,10 +1204,10 @@ class HttpPhotoboothApi implements IPhotoboothApi {
           thumbnailUrl: t.thumbnailUrl,
           frameUrl: t.frameOverlayUrl,
           frameLayer: (t.frameLayer || tpl.frameLayer || 'overlay') as 'overlay' | 'underlay',
-          layoutType: t.layoutType || (orientation === 'landscape' ? '4R_LANDSCAPE' : '4R_PORTRAIT'),
+          layoutType: 'PORTRAIT',
           category: category || (t.slotsCount === 1 ? 'single' : 'grid'),
-          width: t.width || tpl.width || 1200,
-          height: t.height || tpl.height || 1800,
+          width: 1200,
+          height: 1800,
           isActive: t.isActive,
           isDefault: tpl.isDefault ?? false,
           slots: tpl.slots || [],
@@ -2785,6 +2784,24 @@ class HttpPhotoboothApi implements IPhotoboothApi {
       if (res.ok) return await res.json();
       const err = await res.json().catch(() => ({}));
       return errResponse('ROTATE_FAILED', err?.error?.message || 'Gagal merotasi API key booth');
+    } catch (e: any) {
+      return errResponse('NETWORK_ERROR', e?.message || 'Koneksi ke backend gagal');
+    }
+  }
+
+  async resetOwnerKioskHardware(
+    token: string | undefined,
+    id: string
+  ): Promise<ApiResponse<{ success: boolean; message: string }>> {
+    const url = `${API_BASE}/owner/kiosks/${encodeURIComponent(id)}/reset-hardware`;
+    try {
+      const res = await apiFetch(url, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (res.ok) return await res.json();
+      const err = await res.json().catch(() => ({}));
+      return errResponse('RESET_HARDWARE_FAILED', err?.error?.message || 'Gagal mereset ikatan hardware booth');
     } catch (e: any) {
       return errResponse('NETWORK_ERROR', e?.message || 'Koneksi ke backend gagal');
     }

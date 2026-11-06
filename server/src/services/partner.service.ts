@@ -4,10 +4,11 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { AppError, ErrorCode } from '../types/common.types.js';
-import { hashPin, verifyPin, signCustomToken } from '../utils/auth.util.js';
+import { hashPin, verifyPin, signCustomToken, encryptAtRest, decryptAtRest } from '../utils/auth.util.js';
 import { humanLogger } from '../utils/humanLogger.js';
 import { formatSessionCode } from '../utils/session.util.js';
 import { AccessCodeService } from './accessCode.service.js';
+import { persistBrandingFile } from './settings.service.js';
 
 export interface CreatePartnerInput {
   name: string;
@@ -131,7 +132,7 @@ export function calculateWibDateRange(
 }
 
 export class PartnerService {
-  constructor(private prisma: PrismaClient) {}
+  constructor(private prisma: PrismaClient) { }
 
   /**
    * Super Admin: Mengambil daftar seluruh partner & statistik performa
@@ -165,7 +166,7 @@ export class PartnerService {
       id: p.id,
       name: p.name,
       email: p.email,
-      rawPassword: (p as any).rawPassword || null,
+      rawPassword: decryptAtRest((p as any).rawPassword) || null,
       phone: p.phone,
       revenueSharePct: p.revenueSharePct,
       receiptHeader: p.receiptHeader,
@@ -201,7 +202,7 @@ export class PartnerService {
         name: input.name.trim(),
         email: input.email.toLowerCase().trim(),
         passwordHash,
-        rawPassword: input.password.trim(),
+        rawPassword: encryptAtRest(input.password.trim()),
         phone: input.phone?.trim(),
         revenueSharePct: input.revenueSharePct ?? 70,
         isActive: true,
@@ -214,7 +215,7 @@ export class PartnerService {
       id: created.id,
       name: created.name,
       email: created.email,
-      rawPassword: (created as any).rawPassword || input.password.trim(),
+      rawPassword: input.password.trim(),
       revenueSharePct: created.revenueSharePct,
       isActive: created.isActive,
       createdAt: created.createdAt.toISOString(),
@@ -243,7 +244,7 @@ export class PartnerService {
     }
     if (input.password) {
       data.passwordHash = await hashPin(input.password);
-      data.rawPassword = input.password.trim();
+      data.rawPassword = encryptAtRest(input.password.trim());
     }
     if (input.revenueSharePct !== undefined) {
       data.revenueSharePct = input.revenueSharePct;
@@ -267,7 +268,21 @@ export class PartnerService {
       data.receiptPaperWidth = input.receiptPaperWidth;
     }
     if (input.receiptConfig !== undefined) {
-      data.receiptConfig = input.receiptConfig;
+      if (input.receiptConfig && typeof input.receiptConfig === 'object') {
+        const cleanConfig = { ...input.receiptConfig };
+        // HARD GUARDRAIL: Jika logo dikirim Base64, simpan ke file fisik disk (/storage/branding/), JANGAN simpan di DB Supabase
+        if (cleanConfig.logoUrl && typeof cleanConfig.logoUrl === 'string' && cleanConfig.logoUrl.startsWith('data:image/')) {
+          cleanConfig.logoUrl = (await persistBrandingFile(cleanConfig.logoUrl, 'receipt_logo')) || null;
+        }
+        for (const [k, v] of Object.entries(cleanConfig)) {
+          if (typeof v === 'string' && (v.startsWith('data:') || v.length > 2000)) {
+            delete cleanConfig[k];
+          }
+        }
+        data.receiptConfig = cleanConfig;
+      } else {
+        data.receiptConfig = input.receiptConfig;
+      }
     }
     if (input.isActive !== undefined) {
       data.isActive = input.isActive;
@@ -284,7 +299,7 @@ export class PartnerService {
       id: updated.id,
       name: updated.name,
       email: updated.email,
-      rawPassword: (updated as any).rawPassword || null,
+      rawPassword: decryptAtRest((updated as any).rawPassword) || null,
       phone: updated.phone,
       revenueSharePct: updated.revenueSharePct,
       receiptHeader: updated.receiptHeader,
@@ -427,7 +442,7 @@ export class PartnerService {
       where: { id: partnerId },
       data: {
         passwordHash: newHash,
-        rawPassword: newPass.trim(),
+        rawPassword: encryptAtRest(newPass.trim()),
       },
     });
 
@@ -1047,9 +1062,9 @@ export class PartnerService {
 
     const updated = Object.keys(updateData).length > 0
       ? await this.prisma.kiosk.update({
-          where: { id: kioskId },
-          data: updateData,
-        })
+        where: { id: kioskId },
+        data: updateData,
+      })
       : kiosk;
 
     const isTrackingEnabled = Array.isArray(updated.disabledPackageIds) &&

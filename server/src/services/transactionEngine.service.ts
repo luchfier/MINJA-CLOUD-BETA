@@ -126,8 +126,77 @@ export interface TransactionQueryFilters {
   page?: number;
 }
 
+// Cache data dasar bersama (lintas instance service & lintas tab portal) untuk menekan egress Supabase
+const BASE_DATA_TTL_MS = 15_000;
+let baseDataCache: { expiresAt: number; promise: Promise<{ payments: any[]; auditLogs: any[] }> } | null = null;
+
 export class TransactionEngineService {
   constructor(private prisma: PrismaClient) {}
+
+  /** Paksa refresh cache (dipanggil setelah ada pembayaran baru bila diperlukan) */
+  public static invalidateCache(): void {
+    baseDataCache = null;
+  }
+
+  /**
+   * Memuat pembayaran komersial + audit log tunai dengan SELECT MINIMAL (hanya kolom yang dipakai mapper).
+   */
+  private loadBaseData(): Promise<{ payments: any[]; auditLogs: any[] }> {
+    const now = Date.now();
+    if (baseDataCache && now < baseDataCache.expiresAt) {
+      return baseDataCache.promise;
+    }
+
+    const promise = (async () => {
+      const payments = await this.prisma.payment.findMany({
+        where: {
+          paymentType: { not: 'TEST_BYPASS' },
+          grossAmount: { gt: 0 },
+          orderId: { not: { startsWith: 'TEST-' } },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          orderId: true,
+          grossAmount: true,
+          paymentType: true,
+          transactionStatus: true,
+          sessionId: true,
+          createdAt: true,
+          settlementTime: true,
+          session: {
+            select: {
+              basePrice: true,
+              additionalPrints: true,
+              kioskId: true,
+              package: { select: { name: true } },
+              accessCode: { select: { code: true, customerNote: true, cashierName: true } },
+              kiosk: { select: { partnerId: true, code: true, name: true, partner: { select: { name: true } } } },
+            },
+          },
+        },
+      });
+
+      const auditLogs = await this.prisma.auditLog.findMany({
+        where: {
+          action: {
+            in: ['CASH_PAYMENT_CONFIRMED', 'ACCESS_CODE_REDEEMED', 'VOUCHER_APPLIED'],
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+        select: { details: true },
+      });
+
+      return { payments, auditLogs };
+    })();
+
+    baseDataCache = { expiresAt: now + BASE_DATA_TTL_MS, promise };
+    promise.catch(() => {
+      baseDataCache = null;
+    });
+    return promise;
+  }
 
   /**
    * Mengambil daftar transaksi terklasifikasi dengan engine filter multi-kategori dan filter tanggal
@@ -144,39 +213,10 @@ export class TransactionEngineService {
     const page = filters?.page && filters.page > 0 ? filters.page : 1;
     const offset = filters?.offset !== undefined && filters.offset >= 0 ? filters.offset : (page - 1) * limit;
 
-    // Ambil pembayaran beserta sesi, paket, accessCode, dan audit log tunai (Hanya transaksi komersial riil, kecualikan sesi test)
-    const payments = await this.prisma.payment.findMany({
-      where: {
-        paymentType: { not: 'TEST_BYPASS' },
-        grossAmount: { gt: 0 },
-        orderId: { not: { startsWith: 'TEST-' } },
-      },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        session: {
-          include: {
-            package: true,
-            accessCode: true,
-            kiosk: {
-              include: {
-                partner: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    // Ambil audit logs terkait pembayaran tunai & kode akses untuk memperkaya data operator
-    const auditLogs = await this.prisma.auditLog.findMany({
-      where: {
-        action: {
-          in: ['CASH_PAYMENT_CONFIRMED', 'ACCESS_CODE_REDEEMED', 'VOUCHER_APPLIED'],
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 500,
-    });
+    // Ambil data dasar (pembayaran + audit log) via cache bersama 15 detik.
+    // Sebelumnya: SELURUH pembayaran sepanjang masa + include penuh + 500 audit log diambil di SETIAP panggilan
+    // (list + summary = 2x per polling 8 detik per tab Owner/Partner) → pemborosan egress Supabase.
+    const { payments, auditLogs } = await this.loadBaseData();
 
     const auditMap = new Map<string, any>();
     for (const log of auditLogs) {

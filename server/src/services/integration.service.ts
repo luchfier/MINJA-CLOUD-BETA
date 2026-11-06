@@ -269,11 +269,19 @@ export class IntegrationService {
       getEnv().KIOSK_NAME || 'Minja Photobooth'
     );
 
+    if (!result.sent) {
+      return {
+        sent: false,
+        messageId: '',
+        message: 'Pengiriman email gagal. Pastikan kredensial Resend API Key atau SMTP sudah dikonfigurasi.',
+      };
+    }
+
     if (result.isSimulated) {
       return {
-        sent: true,
+        sent: false,
         messageId: result.messageId,
-        message: 'Email dikirim dalam mode simulasi (kredensial Resend kosong).',
+        message: 'Email tidak dikirim ke inbox nyata: kredensial Resend / SMTP belum diatur (lingkungan test).',
       };
     }
 

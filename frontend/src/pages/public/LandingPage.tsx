@@ -145,7 +145,7 @@ export const LandingPage: React.FC = () => {
             {/* 3. Tiga Pilar Kualitas Minja */}
             <PillarsSection t={t} />
 
-            {/* 4. Pilihan Layout Cetak Lab (4R & Strip) */}
+            {/* 4. Pilihan Layout Cetak Lab */}
             <FrameLayoutsSection t={t} />
 
             {/* 5. Statistik & Metrik Kepuasan Pelanggan */}

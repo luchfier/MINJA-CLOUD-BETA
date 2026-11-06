@@ -45,12 +45,12 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
     () =>
       lang === 'id'
         ? [
-          { icon: 'photo_camera', text: 'Sensor Kamera Studio Lab' },
+          { icon: 'photo_camera', text: 'Kamera Studio Presisi Tinggi' },
           { icon: 'water_drop', text: 'Cetak Kertas Lab Tahan Air' },
           { icon: 'cloud_sync', text: 'Galeri Cloud Privat 48 Jam' },
         ]
         : [
-          { icon: 'photo_camera', text: 'Lab Studio Camera Sensor' },
+          { icon: 'photo_camera', text: 'High-Precision Studio Camera' },
           { icon: 'water_drop', text: 'Waterproof Photo Paper' },
           { icon: 'cloud_sync', text: '48-Hour Private Cloud' },
         ],

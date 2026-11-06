@@ -8,6 +8,7 @@ import {
   Plus,
   Layers,
   Trash2,
+  Cpu,
 } from 'lucide-react';
 import { KioskItem, PartnerItem } from '../../../types/api';
 
@@ -21,6 +22,7 @@ export interface FleetTabProps {
   onConfigurePackages: (kiosk: KioskItem) => void;
   onRemoteReset: (id: string, code: string) => void;
   onRotateApiKey: (id: string, code: string) => void;
+  onResetHardware: (id: string, code: string) => void;
   onDeleteKiosk: (kiosk: KioskItem) => void;
 }
 
@@ -34,6 +36,7 @@ export const FleetTab: React.FC<FleetTabProps> = ({
   onConfigurePackages,
   onRemoteReset,
   onRotateApiKey,
+  onResetHardware,
   onDeleteKiosk,
 }) => {
   const relevantKiosks =
@@ -98,6 +101,33 @@ export const FleetTab: React.FC<FleetTabProps> = ({
                     Mitra: {partner?.name || 'Pusat Minja (Direct)'}
                   </p>
                 </div>
+              </div>
+
+              {/* Hardware Binding Status (1 Kunci = 1 Mesin Fisik) */}
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px]">
+                <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                  <Cpu className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <div className="truncate">
+                    {k.hardwareId ? (
+                      <span className="font-mono text-emerald-400 font-bold" title={k.hardwareId}>
+                        Terikat: {k.hardwareId}
+                      </span>
+                    ) : (
+                      <span className="text-amber-400/90 font-medium italic">
+                        Belum Terikat PC
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {k.hardwareId && (
+                  <button
+                    onClick={() => onResetHardware(k.id, k.code)}
+                    className="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 font-bold text-[10px] border border-amber-500/30 transition cursor-pointer shrink-0"
+                    title="Lepas ikatan hardware ini agar kunci dapat dipasangkan ke PC baru"
+                  >
+                    Lepas PC
+                  </button>
+                )}
               </div>
 
               {/* Action Buttons */}

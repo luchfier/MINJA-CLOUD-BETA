@@ -255,6 +255,93 @@ describe('Multi-Kiosk Fleet Management & Heartbeat Endpoints', () => {
     expect(newHbRes.statusCode).toBe(200);
   });
 
+  it('enforces Hardware Binding: 1 API Key is locked to 1 physical kiosk machine', async () => {
+    // 1. Kiosk Fisik A mengirim heartbeat pertama dengan hardwareId "WIN-MACHINE-A"
+    const hbA = await app.inject({
+      method: 'POST',
+      url: '/api/kiosk/heartbeat',
+      headers: {
+        'x-booth-key': createdKioskKey,
+      },
+      payload: {
+        status: 'ONLINE',
+        hardwareId: 'WIN-MACHINE-A',
+      },
+    });
+    expect(hbA.statusCode).toBe(200);
+    const bodyA = JSON.parse(hbA.body);
+    expect(bodyA.success).toBe(true);
+
+    // Verifikasi database: Kiosk terikat ke "WIN-MACHINE-A"
+    const kioskInDb = await app.prisma.kiosk.findUnique({ where: { id: createdKioskId } });
+    expect(kioskInDb?.hardwareId).toBe('WIN-MACHINE-A');
+
+    // 2. Kiosk Fisik A mengirim heartbeat lagi (hardwareId sama) -> Berhasil 200
+    const hbA2 = await app.inject({
+      method: 'POST',
+      url: '/api/kiosk/heartbeat',
+      headers: {
+        'x-booth-key': createdKioskKey,
+      },
+      payload: {
+        status: 'ONLINE',
+        hardwareId: 'WIN-MACHINE-A',
+      },
+    });
+    expect(hbA2.statusCode).toBe(200);
+
+    // 3. Kiosk Fisik B mencoba menggunakan API Key yang sama dengan hardwareId "WIN-MACHINE-B" (Kloning / Multi-booth bypass)
+    // Server HARUS MENOLAK dengan 403 Forbidden!
+    const hbB = await app.inject({
+      method: 'POST',
+      url: '/api/kiosk/heartbeat',
+      headers: {
+        'x-booth-key': createdKioskKey,
+      },
+      payload: {
+        status: 'ONLINE',
+        hardwareId: 'WIN-MACHINE-B',
+      },
+    });
+    expect(hbB.statusCode).toBe(403);
+    const bodyB = JSON.parse(hbB.body);
+    expect(bodyB.success).toBe(false);
+    expect(bodyB.error.code).toBe('FORBIDDEN');
+    expect(bodyB.error.message).toContain('sudah terikat pada perangkat fisik lain');
+
+    // 4. Super Admin mereset ikatan hardware agar kunci bisa dipindahkan ke PC baru
+    const resetRes = await app.inject({
+      method: 'POST',
+      url: `/api/owner/kiosks/${createdKioskId}/reset-hardware`,
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+      },
+    });
+    expect(resetRes.statusCode).toBe(200);
+    const resetBody = JSON.parse(resetRes.body);
+    expect(resetBody.success).toBe(true);
+
+    // Verifikasi database: hardwareId kembali null
+    const kioskUnbound = await app.prisma.kiosk.findUnique({ where: { id: createdKioskId } });
+    expect(kioskUnbound?.hardwareId).toBeNull();
+
+    // 5. Sekarang Kiosk B mengirim heartbeat -> Sukses 200 dan terikat ke "WIN-MACHINE-B"
+    const hbB2 = await app.inject({
+      method: 'POST',
+      url: '/api/kiosk/heartbeat',
+      headers: {
+        'x-booth-key': createdKioskKey,
+      },
+      payload: {
+        status: 'ONLINE',
+        hardwareId: 'WIN-MACHINE-B',
+      },
+    });
+    expect(hbB2.statusCode).toBe(200);
+    const kioskRebound = await app.prisma.kiosk.findUnique({ where: { id: createdKioskId } });
+    expect(kioskRebound?.hardwareId).toBe('WIN-MACHINE-B');
+  });
+
   it('DELETE /api/owner/kiosks/:id removes the kiosk registration', async () => {
     const delRes = await app.inject({
       method: 'DELETE',

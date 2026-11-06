@@ -412,6 +412,7 @@ export interface KioskItem {
   name: string;
   location: string;
   apiKey: string;
+  hardwareId?: string | null;
   status: KioskStatus;
   paperRemaining: number;
   paperRollCapacity: number;

@@ -16,11 +16,11 @@ export interface TemplateItem {
   name: string;
   thumbnailUrl: string;
   frameUrl: string; // PNG overlay
-  layoutType: '4R_PORTRAIT' | '4R_LANDSCAPE' | 'CUSTOM';
+  layoutType: 'PORTRAIT' | 'CUSTOM';
   category?: 'single' | 'grid' | string;
   frameLayer?: 'overlay' | 'underlay'; // 'overlay' = bingkai di atas foto (default), 'underlay' = bingkai di belakang foto
-  width: number;  // Dimensi lebar kanvas native (misal 1200 px untuk 4R Portrait, 1800 px untuk 4R Landscape)
-  height: number; // Dimensi tinggi kanvas native (misal 1800 px untuk 4R Portrait, 1200 px untuk 4R Landscape)
+  width: number;  // Dimensi lebar kanvas native (1200 px)
+  height: number; // Dimensi tinggi kanvas native (1800 px)
   slots: PhotoSlot[];
   borderRadius?: number;
   isActive: boolean;
@@ -31,7 +31,7 @@ export interface TemplateItem {
  * Menyelesaikan kategori template secara deterministik:
  * Kategori hanya ada 2:
  * 1. 'single' -> 1 foto (polaroid / foto tunggal)
- * 2. 'grid'   -> multi foto (2, 3, 4, 6 foto, kolase, maupun 2-strip kembar dalam selembar 4R)
+ * 2. 'grid'   -> multi foto (2, 3, 4, 6 foto, kolase, maupun double strip kembar dalam satu cetakan)
  */
 export function resolveTemplateCategory(tpl: {
   category?: string;

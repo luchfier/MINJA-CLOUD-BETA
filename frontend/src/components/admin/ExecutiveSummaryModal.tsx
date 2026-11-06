@@ -66,7 +66,10 @@ export const ExecutiveSummaryModal: React.FC<ExecutiveSummaryProps> = ({
   const ownerShareAmount = netAfterDeduction - partnerShareAmount;
   const aov = totalSessions > 0 ? Math.round(netRevenue / totalSessions) : 0;
 
-  const reportNumber = `MINJA-EXC/${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}/${Math.floor(1000 + Math.random() * 9000)}`;
+  const now = new Date();
+  const dateCode = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const timeCode = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+  const reportNumber = `MINJA-EXC/${dateCode}-${timeCode}`;
   const printedDate = new Date().toLocaleDateString('id-ID', {
     day: 'numeric',
     month: 'long',

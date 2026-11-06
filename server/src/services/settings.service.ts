@@ -26,7 +26,7 @@ export function ensureBrandingDir(): void {
  */
 export async function persistBrandingFile(
   sourceUrl: string | null | undefined,
-  type: 'logo' | 'wallpaper'
+  type: 'logo' | 'wallpaper' | 'receipt_logo'
 ): Promise<string | null | undefined> {
   if (sourceUrl === null) return null;
   if (!sourceUrl || typeof sourceUrl !== 'string') return sourceUrl;
@@ -97,7 +97,17 @@ function parseKioskTheme(customCss: string | null | undefined): Record<string, a
   try {
     const trimmed = customCss.trim();
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      return JSON.parse(trimmed);
+      const parsed = JSON.parse(trimmed);
+      // HARD GUARDRAIL: Buang semua aset binary/Base64 dan fitur audio kiosk lokal dari Cloud
+      const sanitized: Record<string, any> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k.startsWith('welcomeMusic')) continue; // BGM adalah fitur hardware lokal kiosk, BUKAN cloud
+        if (typeof v === 'string') {
+          if (v.startsWith('data:') || v.length > 2000) continue; // Dilarang keras simpan base64/binary di DB
+        }
+        sanitized[k] = v;
+      }
+      return sanitized;
     }
   } catch (err) {
     console.warn('[SettingsService] Gagal parse customCss JSON:', err);
@@ -105,8 +115,54 @@ function parseKioskTheme(customCss: string | null | undefined): Record<string, a
   return {};
 }
 
+/**
+ * Rekursif membersihkan payload JSON (pageBuilder, eventPackages, dsb.)
+ * Menjamin database Supabase PostgreSQL ZERO binary dan zero Base64
+ */
+export function sanitizeJsonPayload<T>(input: T): T {
+  if (input === null || input === undefined) return input;
+
+  if (typeof input === 'string') {
+    if (input.startsWith('data:') || input.length > 20000) {
+      return '' as unknown as T;
+    }
+    return input;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((item) => sanitizeJsonPayload(item)) as unknown as T;
+  }
+
+  if (typeof input === 'object') {
+    const sanitizedObj: Record<string, any> = {};
+    for (const [key, val] of Object.entries(input)) {
+      if (typeof val === 'string' && (val.startsWith('data:') || val.length > 20000)) {
+        continue;
+      }
+      sanitizedObj[key] = sanitizeJsonPayload(val);
+    }
+    return sanitizedObj as unknown as T;
+  }
+
+  return input;
+}
+
+// In-Memory Cache untuk memangkas Egress Database Supabase (Port 5432)
+let cachedPublicSettings: any = null;
+let cachedPublicSettingsExpiry = 0;
+let cachedAllSettings: any = null;
+let cachedAllSettingsExpiry = 0;
+const CACHE_TTL_MS = 30_000; // 30 detik TTL
+
 export class SettingsService {
   constructor(private prisma: PrismaClient) {}
+
+  public static clearCache() {
+    cachedPublicSettings = null;
+    cachedPublicSettingsExpiry = 0;
+    cachedAllSettings = null;
+    cachedAllSettingsExpiry = 0;
+  }
 
   /**
    * Otomatis memigrasikan logo & wallpaper lama yang masih berformat Base64 ke disk fisik
@@ -153,6 +209,11 @@ export class SettingsService {
    * GET /api/settings
    */
   async getPublicSettings() {
+    const now = Date.now();
+    if (cachedPublicSettings && now < cachedPublicSettingsExpiry) {
+      return cachedPublicSettings;
+    }
+
     let settings = await this.prisma.settings.findFirst();
 
     if (!settings) {
@@ -172,7 +233,7 @@ export class SettingsService {
     const activeSettings = await this.migrateLegacyBranding(settings);
     const kioskTheme = parseKioskTheme(activeSettings.customCss);
 
-    return {
+    const result = {
       boothName: activeSettings.boothName,
       brandTitle: activeSettings.brandTitle,
       tagline: activeSettings.brandTitle,
@@ -202,6 +263,10 @@ export class SettingsService {
       // Extended Kiosk Theme Configs
       ...kioskTheme,
     };
+
+    cachedPublicSettings = result;
+    cachedPublicSettingsExpiry = now + CACHE_TTL_MS;
+    return result;
   }
 
   /**
@@ -209,6 +274,11 @@ export class SettingsService {
    * GET /api/admin/settings
    */
   async getAllSettings() {
+    const now = Date.now();
+    if (cachedAllSettings && now < cachedAllSettingsExpiry) {
+      return cachedAllSettings;
+    }
+
     let settings = await this.prisma.settings.findFirst();
 
     if (!settings) {
@@ -221,13 +291,17 @@ export class SettingsService {
     settings = await this.migrateLegacyBranding(settings);
     const kioskTheme = parseKioskTheme(settings.customCss);
 
-    return {
+    const result = {
       ...settings,
       tagline: settings.brandTitle,
       welcomeHeadline: settings.welcomeText,
       accentColor: settings.secondaryColor,
       ...kioskTheme,
     };
+
+    cachedAllSettings = result;
+    cachedAllSettingsExpiry = now + CACHE_TTL_MS;
+    return result;
   }
 
   /**
@@ -239,6 +313,8 @@ export class SettingsService {
     adminId?: string,
     ipAddress?: string
   ) {
+    SettingsService.clearCache();
+
     let settings = await this.prisma.settings.findFirst();
 
     if (!settings) {
@@ -258,6 +334,17 @@ export class SettingsService {
     }
     if (sanitizedData.accentColor !== undefined && sanitizedData.secondaryColor === undefined) {
       sanitizedData.secondaryColor = sanitizedData.accentColor;
+    }
+
+    // HARD GUARDRAIL: Sanitasi payload JSON bertingkat (pageBuilder & eventPackages) dari string Base64 & binary
+    if (sanitizedData.eventPackages !== undefined) {
+      sanitizedData.eventPackages = sanitizeJsonPayload(sanitizedData.eventPackages);
+    }
+    if (sanitizedData.pageBuilderLanding !== undefined) {
+      sanitizedData.pageBuilderLanding = sanitizeJsonPayload(sanitizedData.pageBuilderLanding);
+    }
+    if (sanitizedData.pageBuilderGallery !== undefined) {
+      sanitizedData.pageBuilderGallery = sanitizeJsonPayload(sanitizedData.pageBuilderGallery);
     }
 
     // Ekstrak & simpan file logo jika dikirim sebagai Base64
@@ -280,7 +367,7 @@ export class SettingsService {
 
     // Kumpulkan seluruh konfigurasi visual/audio kiosk yang diperluas
     const existingKioskTheme = parseKioskTheme(settings.customCss);
-    const updatedKioskTheme = {
+    const updatedKioskTheme: Record<string, any> = {
       ...existingKioskTheme,
       ...(sanitizedData.welcomeSubheadline !== undefined && { welcomeSubheadline: sanitizedData.welcomeSubheadline }),
       ...(sanitizedData.startSessionButtonText !== undefined && { startSessionButtonText: sanitizedData.startSessionButtonText }),
@@ -293,6 +380,17 @@ export class SettingsService {
       ...(sanitizedData.glassmorphismIntensity !== undefined && { glassmorphismIntensity: sanitizedData.glassmorphismIntensity }),
       ...(sanitizedData.enableVignette !== undefined && { enableVignette: sanitizedData.enableVignette }),
     };
+
+    // HARD GUARDRAIL: Pastikan TIDAK ADA string binary/Base64 atau audio kiosk yang masuk ke database Cloud
+    for (const [k, v] of Object.entries(updatedKioskTheme)) {
+      if (k.startsWith('welcomeMusic')) {
+        delete updatedKioskTheme[k];
+        continue;
+      }
+      if (typeof v === 'string' && (v.startsWith('data:') || v.length > 2000)) {
+        delete updatedKioskTheme[k];
+      }
+    }
 
     // Filter agar HANYA kolom prisma resmi yang dimasukkan ke query prisma.settings.update
     const validPrismaColumns = new Set([
@@ -329,13 +427,15 @@ export class SettingsService {
         prismaData[key] = sanitizedData[key];
       }
     }
-    // Simpan serialisasi JSON kiosk theme ke customCss
+    // Simpan serialisasi JSON kiosk theme yang sudah bersih dan ringan ke customCss
     prismaData.customCss = JSON.stringify(updatedKioskTheme);
 
     const updated = await this.prisma.settings.update({
       where: { id: settings.id },
       data: prismaData,
     });
+
+    SettingsService.clearCache();
 
     await logAuditEvent(this.prisma, {
       action: 'SETTINGS_UPDATED',

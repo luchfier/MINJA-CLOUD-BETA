@@ -9,7 +9,7 @@ export interface HoleDetectionResult {
   slots: PhotoSlot[];
   nativeWidth: number;
   nativeHeight: number;
-  orientation: '4R_PORTRAIT' | '4R_LANDSCAPE';
+  orientation: 'PORTRAIT';
   category: 'single' | 'grid';
   message: string;
 }
@@ -44,23 +44,17 @@ function loadImageSource(source: File | string): Promise<HTMLImageElement> {
  */
 export async function detectTransparentHoles(
   imageSource: File | string,
-  targetCanvasWidth = 1200,
-  targetCanvasHeight = 1800
+  _targetCanvasWidth = 1200,
+  _targetCanvasHeight = 1800
 ): Promise<HoleDetectionResult> {
   const img = await loadImageSource(imageSource);
 
   const nativeW = img.naturalWidth || 1200;
   const nativeH = img.naturalHeight || 1800;
-  const isLandscape = nativeW > nativeH;
-  const orientation: '4R_PORTRAIT' | '4R_LANDSCAPE' = isLandscape ? '4R_LANDSCAPE' : '4R_PORTRAIT';
-
-  // Sesuaikan target canvas jika gambar landscape
-  let canvasW = targetCanvasWidth;
-  let canvasH = targetCanvasHeight;
-  if (isLandscape && canvasW < canvasH) {
-    canvasW = 1800;
-    canvasH = 1200;
-  }
+  // Seluruh kanvas cetak Minja 100% Portrait Standar (1200 × 1800 px)
+  const orientation: 'PORTRAIT' = 'PORTRAIT';
+  const canvasW = 1200;
+  const canvasH = 1800;
 
   // Downscale image untuk kecepatan dan efisiensi memori (target scan max 360px)
   const scanW = 360;
@@ -162,7 +156,7 @@ export async function detectTransparentHoles(
         const density = count / (widthScan * heightScan);
 
         // Filter: Hanya area lubang yang cukup besar (bukan noise atau titik kecil transparan)
-        // Lebar & tinggi minimal ~15px pada scan resolution (~50px pada full-res 4R)
+        // Lebar & tinggi minimal ~15px pada scan resolution (~50px pada resolusi 1200×1800)
         // Density minimal 0.4 (agar lubang foto berbentuk kotak/persegi/oval, bukan teks tipis)
         if (widthScan >= 15 && heightScan >= 15 && count >= 200 && density >= 0.4) {
           components.push({ minX, maxX, minY, maxY, count });
@@ -184,9 +178,7 @@ export async function detectTransparentHoles(
     };
   }
 
-  // Urutkan lubang secara natural:
-  // Portrait: Atas ke bawah, lalu kiri ke kanan
-  // Landscape: Kiri ke kanan, lalu atas ke bawah
+  // Urutkan lubang secara natural: atas ke bawah, lalu kiri ke kanan
   components.sort((a, b) => {
     const rowTolerance = 25; // Toleransi perbedaan Y untuk baris yang sama
     const dy = a.minY - b.minY;
@@ -196,7 +188,7 @@ export async function detectTransparentHoles(
     return a.minX - b.minX;
   });
 
-  // Konversi bounding box scan kembali ke dimensi target 4R (1200x1800 atau 1800x1200)
+  // Konversi bounding box scan kembali ke dimensi target standar (1200×1800 px)
   // dengan pembulatan ke kelipatan 5 atau 10 px untuk kerapian studio
   const snapTo = (val: number, step = 5) => Math.round(val / step) * step;
 

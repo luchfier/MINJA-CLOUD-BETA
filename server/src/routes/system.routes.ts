@@ -62,8 +62,21 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
    * GET /api/system/kiosk-status
    * Status publik ringan untuk layar kiosk (status maintenance, nama booth, sinyal remote test trigger, dan sisa kertas printer)
    */
+  // Cache RAM ringan: endpoint ini dipanggil setiap detak heartbeat oleh SEMUA kiosk.
+  // Hanya ambil kolom yang dibutuhkan (JANGAN findFirst() seluruh baris — insiden egress 7.9 GB 04 Nov 2026).
+  let settingsCache: { maintenanceMode: boolean; boothName: string | null } | null = null;
+  let settingsCacheExpiry = 0;
+  const KIOSK_STATUS_SETTINGS_TTL_MS = 15_000;
+
   app.get('/api/system/kiosk-status', async (request, reply) => {
-    const settings = await prisma.settings.findFirst();
+    const nowMs = Date.now();
+    if (!settingsCache || nowMs >= settingsCacheExpiry) {
+      settingsCache = await prisma.settings.findFirst({
+        select: { maintenanceMode: true, boothName: true },
+      });
+      settingsCacheExpiry = nowMs + KIOSK_STATUS_SETTINGS_TTL_MS;
+    }
+    const settings = settingsCache;
     const isMaintenance = Boolean(settings?.maintenanceMode);
     const pendingTestTrigger = OwnerService.getPendingTestTrigger();
 

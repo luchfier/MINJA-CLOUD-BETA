@@ -308,6 +308,10 @@ export interface IPhotoboothApi {
     token: string | undefined,
     id: string
   ): Promise<ApiResponse<{ id: string; code: string; apiKey: string }>>;
+  resetOwnerKioskHardware(
+    token: string | undefined,
+    id: string
+  ): Promise<ApiResponse<{ success: boolean; message: string }>>;
   deleteOwnerKiosk(
     token: string | undefined,
     id: string

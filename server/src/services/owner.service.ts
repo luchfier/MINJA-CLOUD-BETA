@@ -10,7 +10,7 @@ import { EmailService } from './email.service.js';
 import { formatSessionCode } from '../utils/session.util.js';
 import { humanLogger } from '../utils/humanLogger.js';
 import { getEnv } from '../config/env.js';
-import { hashPin } from '../utils/auth.util.js';
+import { hashPin, decryptAtRest } from '../utils/auth.util.js';
 import { AppError, ErrorCode } from '../types/common.types.js';
 
 export interface TunnelConfig {
@@ -622,23 +622,38 @@ export class OwnerService {
       paymentsWhere.session = { kioskId: { in: targetKioskIds } };
     }
 
-    const settledPayments = await this.prisma.payment.findMany({
+    // SELECT MINIMAL: hanya kolom yang dipakai agregasi (sebelumnya include penuh session/package/kiosk/partner
+    // = ±1 MB per panggilan untuk 30 hari, dipolling tiap 8 detik → boros egress Supabase).
+    // Data partner (revenueSharePct) diambil dari allKiosks yang sudah dimuat di atas.
+    const settledPaymentsRaw = await this.prisma.payment.findMany({
       where: paymentsWhere,
-      include: {
+      select: {
+        grossAmount: true,
+        orderId: true,
+        paymentType: true,
         session: {
-          include: {
-            package: true,
-            accessCode: true,
-            kiosk: {
-              include: {
-                partner: true,
-              },
-            },
+          select: {
+            kioskId: true,
+            basePrice: true,
+            accessCode: { select: { id: true } },
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
     });
+
+    const kioskPartnerMap = new Map<string, { id: string; revenueSharePct: number } | null>();
+    for (const k of allKiosks) {
+      kioskPartnerMap.set(k.id, k.partner ? { id: k.partner.id, revenueSharePct: k.partner.revenueSharePct } : null);
+    }
+    const settledPayments = settledPaymentsRaw.map((p) => ({
+      ...p,
+      session: p.session
+        ? {
+            ...p.session,
+            kiosk: { partner: p.session.kioskId ? kioskPartnerMap.get(p.session.kioskId) ?? null : null },
+          }
+        : null,
+    }));
 
     // 5. Query Sesi pada Periode Terpilih
     const sessionsWhere: any = {
@@ -652,12 +667,7 @@ export class OwnerService {
     const sessions = await this.prisma.session.findMany({
       where: sessionsWhere,
       select: {
-        id: true,
         totalPrints: true,
-        additionalPrints: true,
-        totalPrice: true,
-        state: true,
-        kioskId: true,
       },
     });
 
@@ -951,7 +961,7 @@ export class OwnerService {
         id: partner.id,
         name: partner.name,
         email: partner.email,
-        rawPassword: (partner as any).rawPassword || null,
+        rawPassword: decryptAtRest((partner as any).rawPassword) || null,
         phone: partner.phone,
         revenueSharePct: partner.revenueSharePct,
         receiptHeader: partner.receiptHeader,
@@ -1068,23 +1078,24 @@ export class OwnerService {
         take: limit,
         skip,
         orderBy: { createdAt: 'desc' },
-        include: {
-          package: true,
-          kiosk: {
-            include: {
-              partner: true,
-            },
-          },
-          accessCode: {
-            include: {
-              operator: true,
-            },
-          },
+        // SELECT MINIMAL (hemat egress): hanya kolom yang dipetakan ke response di bawah
+        select: {
+          id: true,
+          kioskId: true,
+          totalPrice: true,
+          totalPrints: true,
+          photosPrinted: true,
+          state: true,
+          createdAt: true,
+          package: { select: { name: true } },
+          kiosk: { select: { code: true, name: true, partnerId: true, partner: { select: { name: true } } } },
+          accessCode: { select: { cashierName: true, operator: { select: { name: true } } } },
           payments: {
             orderBy: { createdAt: 'desc' },
             take: 1,
+            select: { paymentType: true, transactionStatus: true, orderId: true },
           },
-          deliveryJobs: true,
+          deliveryJobs: { select: { channel: true, status: true, email: true, sentAt: true } },
         },
       }),
     ]);

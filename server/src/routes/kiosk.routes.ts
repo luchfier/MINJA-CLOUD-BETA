@@ -39,6 +39,7 @@ const heartbeatSchema = z.object({
   cameraStatus: z.string().optional(),
   appVersion: z.string().optional(),
   activeSessionId: z.string().optional(),
+  hardwareId: z.string().optional(),
 });
 
 export async function kioskRoutes(app: FastifyInstance): Promise<void> {
@@ -169,15 +170,30 @@ export async function kioskRoutes(app: FastifyInstance): Promise<void> {
         data: result,
       });
     } catch (err: any) {
-      return reply.status(401).send({
+      const statusCode = err.statusCode || err.status || (err.code === 'FORBIDDEN' ? 403 : 401);
+      return reply.status(statusCode).send({
         success: false,
         error: {
-          code: 'UNAUTHORIZED',
+          code: err.code || (statusCode === 403 ? 'FORBIDDEN' : 'UNAUTHORIZED'),
           message: err.message || 'Gagal memproses telemetri booth.',
         },
       });
     }
   });
+
+  /**
+   * POST /api/owner/kiosks/:id/reset-hardware
+   * Melepas ikatan hardware ID booth fisik agar dapat dipasang di PC baru
+   */
+  app.post(
+    '/api/owner/kiosks/:id/reset-hardware',
+    { preHandler: [requireAdminAuth] },
+    async (request: any, reply) => {
+      const { id } = request.params;
+      const result = await kioskService.resetHardwareBinding(id);
+      sendSuccess(reply, result);
+    }
+  );
 
   /**
    * GET /api/kiosk/activation-status
@@ -193,8 +209,11 @@ export async function kioskRoutes(app: FastifyInstance): Promise<void> {
    * Memasukkan BOOTH_API_KEY dari layar aktivasi Kiosk untuk mengaktifkan mesin
    */
   app.post('/api/kiosk/activate', async (request, reply) => {
-    const body = z.object({ apiKey: z.string().min(5, 'API Key minimal 5 karakter') }).parse(request.body);
-    const result = await kioskService.activateKiosk(body.apiKey);
+    const body = z.object({
+      apiKey: z.string().min(5, 'API Key minimal 5 karakter'),
+      hardwareId: z.string().optional(),
+    }).parse(request.body);
+    const result = await kioskService.activateKiosk(body.apiKey, body.hardwareId);
     sendSuccess(reply, result);
   });
 }

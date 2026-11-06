@@ -30,6 +30,7 @@ export interface HeartbeatPayload {
   cameraStatus?: string;
   appVersion?: string;
   activeSessionId?: string;
+  hardwareId?: string;
 }
 
 export interface PendingPrintCommand {
@@ -48,6 +49,7 @@ export interface KioskItemDto {
   name: string;
   location: string;
   apiKey: string;
+  hardwareId: string | null;
   status: KioskStatus;
   paperRemaining: number;
   paperRollCapacity: number;
@@ -144,6 +146,7 @@ export class KioskService {
         name: kiosk.name,
         location: kiosk.location,
         apiKey: kiosk.apiKey,
+        hardwareId: kiosk.hardwareId || null,
         status: effectiveStatus,
         paperRemaining: kiosk.paperRemaining,
         paperRollCapacity: kiosk.paperRollCapacity,
@@ -210,6 +213,7 @@ export class KioskService {
       name: kiosk.name,
       location: kiosk.location,
       apiKey: kiosk.apiKey,
+      hardwareId: kiosk.hardwareId || null,
       status: effectiveStatus,
       paperRemaining: kiosk.paperRemaining,
       paperRollCapacity: kiosk.paperRollCapacity,
@@ -419,12 +423,36 @@ export class KioskService {
       throw new Error('Header X-Booth-Key wajib disertakan.');
     }
 
+    // Select minimal: heartbeat dipanggil sangat sering oleh setiap kiosk (hemat egress Supabase)
     const kiosk = await this.prisma.kiosk.findUnique({
       where: { apiKey },
+      select: {
+        id: true,
+        code: true,
+        hardwareId: true,
+        isLocked: true,
+        paperRemaining: true,
+        printerStatus: true,
+        cameraStatus: true,
+        appVersion: true,
+        ipAddress: true,
+      },
     });
 
     if (!kiosk) {
-      throw new Error('Kunci otentikasi booth tidak valid atau mesin belum terdaftar.');
+      throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Kunci otentikasi booth tidak valid atau mesin belum terdaftar.');
+    }
+
+    // HARDWARE BINDING GUARDRAIL (1 Kunci Lisensi = 1 Perangkat Fisik):
+    const incomingHw = (payload.hardwareId || '').trim();
+    if (incomingHw) {
+      if (kiosk.hardwareId && kiosk.hardwareId !== incomingHw) {
+        throw new AppError(
+          403,
+          ErrorCode.FORBIDDEN,
+          `Kunci lisensi ini sudah terikat pada perangkat fisik lain (ID: ${kiosk.hardwareId}). 1 Kunci lisensi hanya diizinkan untuk 1 booth fisik.`
+        );
+      }
     }
 
     let nextStatus = payload.status || KioskStatus.ONLINE;
@@ -432,17 +460,26 @@ export class KioskService {
       nextStatus = KioskStatus.MAINTENANCE;
     }
 
+    const dataToUpdate: any = {
+      lastHeartbeat: new Date(),
+      status: nextStatus,
+      paperRemaining: payload.paperRemaining !== undefined ? payload.paperRemaining : kiosk.paperRemaining,
+      printerStatus: payload.printerStatus || kiosk.printerStatus,
+      cameraStatus: payload.cameraStatus || kiosk.cameraStatus,
+      appVersion: payload.appVersion || kiosk.appVersion,
+      ipAddress: ipAddress || kiosk.ipAddress,
+    };
+
+    // Otomatis bind hardwareId pada heartbeat pertama jika belum terikat
+    if (incomingHw && !kiosk.hardwareId) {
+      dataToUpdate.hardwareId = incomingHw;
+      humanLogger.success('KIOSK', `Perangkat fisik [${kiosk.code}] berhasil terikat ke Hardware ID: ${incomingHw}`);
+    }
+
     const updated = await this.prisma.kiosk.update({
       where: { id: kiosk.id },
-      data: {
-        lastHeartbeat: new Date(),
-        status: nextStatus,
-        paperRemaining: payload.paperRemaining !== undefined ? payload.paperRemaining : kiosk.paperRemaining,
-        printerStatus: payload.printerStatus || kiosk.printerStatus,
-        cameraStatus: payload.cameraStatus || kiosk.cameraStatus,
-        appVersion: payload.appVersion || kiosk.appVersion,
-        ipAddress: ipAddress || kiosk.ipAddress,
-      },
+      data: dataToUpdate,
+      select: { id: true, code: true, name: true, location: true, isLocked: true, lockReason: true, hardwareId: true },
     });
 
     const pendingCommands = KioskService.popPrintCommands(kiosk.id);
@@ -513,7 +550,7 @@ export class KioskService {
   /**
    * Kiosk: Mengaktivasi perangkat fisik dengan memasukkan BOOTH_API_KEY
    */
-  async activateKiosk(apiKey: string) {
+  async activateKiosk(apiKey: string, hardwareId?: string) {
     const raw = (apiKey || '').trim();
     const cleanKey = raw
       .replace(/^BOOTH_API_KEY\s*=\s*/i, '')
@@ -531,6 +568,25 @@ export class KioskService {
 
     if (!kiosk) {
       throw new AppError(404, ErrorCode.NOT_FOUND, 'Kunci Aktivasi Booth tidak valid atau belum didaftarkan. Hubungi administrator.');
+    }
+
+    // HARDWARE BINDING GUARDRAIL (1 Kunci Lisensi = 1 Perangkat Fisik):
+    const cleanHw = (hardwareId || '').trim();
+    if (cleanHw) {
+      if (kiosk.hardwareId && kiosk.hardwareId !== cleanHw) {
+        throw new AppError(
+          403,
+          ErrorCode.FORBIDDEN,
+          `Kunci aktivasi ini sudah terikat pada perangkat fisik lain (ID: ${kiosk.hardwareId}). Hubungi Admin untuk mereset ikatan perangkat.`
+        );
+      }
+      if (!kiosk.hardwareId) {
+        await this.prisma.kiosk.update({
+          where: { id: kiosk.id },
+          data: { hardwareId: cleanHw },
+        });
+        humanLogger.success('KIOSK', `Booth [${kiosk.code}] terikat ke Hardware ID: ${cleanHw}`);
+      }
     }
 
     // Set di runtime process.env
@@ -578,7 +634,30 @@ export class KioskService {
         location: kiosk.location,
         status: kiosk.status,
         partnerName: kiosk.partner?.name || null,
+        hardwareId: cleanHw || kiosk.hardwareId,
       },
+    };
+  }
+
+  /**
+   * Super Admin / Partner: Melepas ikatan perangkat fisik (Hardware ID) agar kunci bisa dipindahkan ke PC baru
+   */
+  async resetHardwareBinding(kioskId: string) {
+    const kiosk = await this.prisma.kiosk.findUnique({ where: { id: kioskId } });
+    if (!kiosk) {
+      throw new AppError(404, ErrorCode.NOT_FOUND, 'Mesin booth tidak ditemukan.');
+    }
+
+    await this.prisma.kiosk.update({
+      where: { id: kioskId },
+      data: { hardwareId: null },
+    });
+
+    humanLogger.info('KIOSK', `Ikatan perangkat fisik booth [${kiosk.code}] telah di-reset (unbound). Kunci API siap dipasangkan ke PC baru.`);
+
+    return {
+      success: true,
+      message: `Ikatan perangkat fisik untuk booth [${kiosk.code}] berhasil dilepas. Kunci API kini dapat digunakan di komputer baru.`,
     };
   }
 }

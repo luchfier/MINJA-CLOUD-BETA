@@ -4,6 +4,7 @@
 
 import argon2 from 'argon2';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { getEnv } from '../config/env.js';
 
 /**
@@ -120,6 +121,41 @@ export function verifyAdminToken(token: string): AdminJwtPayload | null {
     return decoded;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Enkripsi AES-256-GCM dua arah untuk field sensitif di database (contoh: rawPassword at rest)
+ * Menjamin database Supabase PostgreSQL tidak menyimpan password plaintext
+ */
+export function encryptAtRest(plainText: string, secretKey = getEnv().JWT_SECRET): string {
+  if (!plainText) return plainText;
+  const key = crypto.createHash('sha256').update(secretKey).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+/**
+ * Dekripsi AES-256-GCM dua arah saat field sensitif dibutuhkan kembali oleh Super Admin
+ * Mendukung backward-compatibility penuh jika data masih berupa teks biasa lama
+ */
+export function decryptAtRest(encryptedText: string, secretKey = getEnv().JWT_SECRET): string {
+  if (!encryptedText || !encryptedText.startsWith('enc:')) return encryptedText;
+  try {
+    const parts = encryptedText.split(':');
+    if (parts.length !== 4) return encryptedText;
+    const iv = Buffer.from(parts[1], 'hex');
+    const tag = Buffer.from(parts[2], 'hex');
+    const encrypted = Buffer.from(parts[3], 'hex');
+    const key = crypto.createHash('sha256').update(secretKey).digest();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(encrypted, undefined, 'utf8') + decipher.final('utf8');
+  } catch {
+    return encryptedText;
   }
 }
 

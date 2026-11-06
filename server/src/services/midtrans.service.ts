@@ -58,8 +58,8 @@ export class MidtransService {
    * Mengirim charge request QRIS ke Midtrans Core API
    */
   async createQrisCharge(orderId: string, grossAmount: number): Promise<MidtransChargeQrisResult> {
-    if (!this.isConfigured() || process.env['NODE_ENV'] === 'test') {
-      // Fallback offline mock jika server key belum dikonfigurasi atau mode unit test
+    if (process.env['NODE_ENV'] === 'test') {
+      // Mock khusus lingkungan automated test suite
       const mockQr = `00020101021226670016ID.CO.MIDTRANS.WWW01189360091800000000000215${orderId}51450015ID.OR.GPN.WWW02150000000000000005204581253033605405500005802ID5915MINJA PHOTOBOOTH6007JAKARTA61051234062070703A0163041A2F`;
       return {
         transactionId: `mock-tx-${Date.now()}`,
@@ -71,6 +71,10 @@ export class MidtransService {
         expiryTime: new Date(Date.now() + 15 * 60 * 1000),
         rawPayload: { simulated: true },
       };
+    }
+
+    if (!this.isConfigured()) {
+      throw new Error('Midtrans belum dikonfigurasi. Server Key wajib diatur sebelum membuat tagihan QRIS.');
     }
 
     const endpoint = `${this.getBaseUrl()}/v2/charge`;

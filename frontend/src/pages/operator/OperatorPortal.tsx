@@ -269,8 +269,22 @@ export const OperatorPortal: React.FC = () => {
   useEffect(() => {
     if (operatorToken) {
       fetchAllOperatorData();
-      const interval = setInterval(fetchAllOperatorData, 10000);
-      return () => clearInterval(interval);
+      const interval = setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        fetchAllOperatorData();
+      }, 20000);
+
+      const handleVisibilityChange = () => {
+        if (typeof document !== 'undefined' && !document.hidden) {
+          fetchAllOperatorData();
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
     }
   }, [operatorToken, fetchAllOperatorData]);
 
@@ -1425,7 +1439,7 @@ export const OperatorPortal: React.FC = () => {
                 </button>
               </div>
 
-              {/* Printable Receipt Paper Mockup */}
+              {/* Printable Receipt Paper Preview */}
               <div
                 id="thermal-receipt-print"
                 ref={receiptPrintRef}

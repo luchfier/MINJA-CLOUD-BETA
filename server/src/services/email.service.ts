@@ -186,15 +186,9 @@ export class EmailService {
       }
     }
 
-    // 2. Fallback Simulasi jika dalam Test Mode atau belum ada kredensial aktif
-    if (
-      !this.isConfigured ||
-      process.env['NODE_ENV'] === 'test' ||
-      (!this.resendApiKey && !this.transporter)
-    ) {
+    // 2. Jika dalam Automated Test Suite (NODE_ENV === 'test') tanpa kredensial aktif
+    if (process.env['NODE_ENV'] === 'test' && (!this.resendApiKey && !this.transporter)) {
       const simMessageId = `email_sim_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      humanLogger.email(`[Simulasi] Soft file terkirim ke: ${recipientEmail} (Tautan: ${galleryUrl.slice(0, 50)}...)`);
-
       return {
         sent: true,
         messageId: simMessageId,
@@ -203,7 +197,7 @@ export class EmailService {
       };
     }
 
-    // 3. Fallback alternatif: Kirim pesan via SMTP Transporter jika ada
+    // 3. Pengiriman via SMTP Transporter jika ada
     if (this.transporter) {
       try {
         const info = await this.transporter.sendMail({
@@ -220,20 +214,16 @@ export class EmailService {
           isSimulated: false,
         };
       } catch (err: any) {
-        console.warn(
-          `[EmailService:SMTP] Koneksi SMTP live terhalang ISP (${err?.message}). Menggunakan fallback aman agar kiosk pelanggan tidak terhenti:`,
-          err?.message
-        );
+        console.warn(`[EmailService:SMTP] Koneksi SMTP gagal: ${err?.message}`);
       }
     }
 
-    // 4. Fail-safe fallback id
-    const fallbackId = `email_fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    // 4. Jika tidak ada kredensial aktif sama sekali
     return {
-      sent: true,
-      messageId: fallbackId,
+      sent: false,
+      messageId: '',
       recipientEmail,
-      isSimulated: true,
+      isSimulated: false,
     };
   }
 }

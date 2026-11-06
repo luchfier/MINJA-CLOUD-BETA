@@ -500,6 +500,7 @@ model Kiosk {
   name              String       // contoh: "Minja Booth 01 - Pondok Indah Mall"
   location          String       // contoh: "Lantai 2 Depan Cinema XXI"
   apiKey            String       @unique @map("api_key") // "mja_kiosk_live_xxx"
+  hardwareId        String?      @map("hardware_id") // Kunci unik perangkat fisik (1 Key = 1 Mesin Booth)
   status            KioskStatus  @default(OFFLINE)
   paperRemaining    Int          @default(400) @map("paper_remaining")
   paperRollCapacity Int          @default(400) @map("paper_roll_capacity")

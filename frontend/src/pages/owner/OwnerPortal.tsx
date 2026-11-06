@@ -733,12 +733,26 @@ export const OwnerPortal: React.FC = () => {
     }
   }, [token, fetchNetworkAnalytics, fetchTransactions, fetchNetworkSessions]);
 
-  // Polling Real-Time setiap 8 detik
+  // Polling Real-Time efisien: 25 detik (dan berhenti saat tab tidak aktif untuk menghemat bandwidth/egress)
   useEffect(() => {
     if (token) {
       fetchAllData();
-      const interval = setInterval(fetchAllData, 8000);
-      return () => clearInterval(interval);
+      const interval = setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        fetchAllData();
+      }, 25000);
+
+      const handleVisibilityChange = () => {
+        if (typeof document !== 'undefined' && !document.hidden) {
+          fetchAllData();
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
     }
     return undefined;
   }, [token, fetchAllData]);
@@ -901,6 +915,21 @@ export const OwnerPortal: React.FC = () => {
       }
     } catch {
       showFeedback('error', 'Gagal rotasi API Key');
+    }
+  };
+
+  const handleResetHardware = async (kioskId: string, kioskCode: string) => {
+    if (!token || !window.confirm(`Lepas ikatan perangkat fisik (Hardware ID) untuk booth [${kioskCode}]?\n\nKunci API booth ini nantinya bisa diaktivasi pada komputer booth baru.`)) return;
+    try {
+      const res = await photoboothApi.resetOwnerKioskHardware(token, kioskId);
+      if (res.success) {
+        showFeedback('success', `Ikatan perangkat fisik booth [${kioskCode}] berhasil dilepas!`);
+        fetchAllData();
+      } else {
+        showFeedback('error', res.error?.message || 'Gagal melepas ikatan hardware');
+      }
+    } catch {
+      showFeedback('error', 'Koneksi ke backend gagal');
     }
   };
 
@@ -1513,6 +1542,7 @@ export const OwnerPortal: React.FC = () => {
             }}
             onRemoteReset={handleRemoteResetKiosk}
             onRotateApiKey={handleRotateApiKey}
+            onResetHardware={handleResetHardware}
             onDeleteKiosk={(k) => setKioskToDelete(k)}
           />
         );

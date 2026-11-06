@@ -771,7 +771,7 @@ export const ThermalReceiptSettingsTab: React.FC<ThermalReceiptSettingsTabProps>
             </button>
           </div>
 
-          {/* Paper Body Mockup */}
+          {/* Paper Body Preview */}
           <div
             className={`mx-auto bg-white text-slate-950 p-6 rounded-lg shadow-2xl font-mono text-xs border border-slate-300 select-none transition-all duration-300 ${
               receiptPaperWidth === 58 ? 'max-w-[280px]' : 'max-w-[360px]'
