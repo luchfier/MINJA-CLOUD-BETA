@@ -1,24 +1,22 @@
 // src/routes/system.routes.ts
-// System endpoints: health check, version
-// Sesuai API_CONTRACT.md §3.14
+// System endpoints: health check & version info Minja Cloud VPS
 
 import type { FastifyInstance } from 'fastify';
 import { sendSuccess } from '../middleware/error.middleware.js';
-import { OwnerService } from '../services/owner.service.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '2.0.0';
 const startTime = Date.now();
 
 export async function systemRoutes(app: FastifyInstance): Promise<void> {
   const prisma = app.prisma;
 
   /**
-   * GET /api & GET /api/system/info
+   * GET /api
    * Root API Welcome info
    */
   app.get('/api', async (_request, reply) => {
     sendSuccess(reply, {
-      name: 'MinjaPhotobooth API Server',
+      name: 'Minja Cloud Platform API Server',
       version: APP_VERSION,
       status: 'online',
       healthCheck: '/api/system/health',
@@ -48,131 +46,4 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
       version: APP_VERSION,
     });
   });
-
-  /**
-   * GET /api/system/sync-status
-   * Status Auto-Sync Engine & antrean sinkronisasi offline
-   */
-  app.get('/api/system/sync-status', async (_request, reply) => {
-    const status = app.syncQueueService.getStatus();
-    sendSuccess(reply, status);
-  });
-
-  /**
-   * GET /api/system/kiosk-status
-   * Status publik ringan untuk layar kiosk (status maintenance, nama booth, sinyal remote test trigger, dan sisa kertas printer)
-   */
-  // Cache RAM ringan: endpoint ini dipanggil setiap detak heartbeat oleh SEMUA kiosk.
-  // Hanya ambil kolom yang dibutuhkan (JANGAN findFirst() seluruh baris — insiden egress 7.9 GB 04 Nov 2026).
-  let settingsCache: { maintenanceMode: boolean; boothName: string | null } | null = null;
-  let settingsCacheExpiry = 0;
-  const KIOSK_STATUS_SETTINGS_TTL_MS = 15_000;
-
-  app.get('/api/system/kiosk-status', async (request, reply) => {
-    const nowMs = Date.now();
-    if (!settingsCache || nowMs >= settingsCacheExpiry) {
-      settingsCache = await prisma.settings.findFirst({
-        select: { maintenanceMode: true, boothName: true },
-      });
-      settingsCacheExpiry = nowMs + KIOSK_STATUS_SETTINGS_TTL_MS;
-    }
-    const settings = settingsCache;
-    const isMaintenance = Boolean(settings?.maintenanceMode);
-    const pendingTestTrigger = OwnerService.getPendingTestTrigger();
-
-    let paperRemaining = 400;
-    let paperRollCapacity = 400;
-    let isPaperTrackingEnabled = false;
-    try {
-      const apiKey =
-        (request.headers['x-booth-key'] as string) ||
-        (request.headers['x-api-key'] as string) ||
-        (request.query as Record<string, string>)?.['apiKey'] ||
-        process.env['BOOTH_API_KEY'];
-      if (apiKey) {
-        const kiosk = await prisma.kiosk.findFirst({
-          where: { apiKey },
-          select: { paperRemaining: true, paperRollCapacity: true, disabledPackageIds: true },
-        });
-        if (kiosk) {
-          paperRemaining = kiosk.paperRemaining;
-          paperRollCapacity = kiosk.paperRollCapacity;
-          isPaperTrackingEnabled = Array.isArray(kiosk.disabledPackageIds) &&
-            kiosk.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__');
-        }
-      }
-    } catch {
-      // Abaikan fallback
-    }
-
-    sendSuccess(reply, {
-      isMaintenance,
-      maintenanceReason: isMaintenance ? OwnerService.getMaintenanceReason() : undefined,
-      boothName: settings?.boothName || 'Minja Photobooth',
-      kioskStatus: isMaintenance ? 'MAINTENANCE' : 'STANDBY',
-      pendingTestTrigger,
-      paperRemaining,
-      paperRollCapacity,
-      paperTrackingEnabled: isPaperTrackingEnabled,
-      isPaperLow: isPaperTrackingEnabled ? paperRemaining <= 30 : false,
-      isPaperOut: isPaperTrackingEnabled ? paperRemaining <= 0 : false,
-    });
-  });
-
-  /**
-   * POST /api/system/ack-test-trigger
-   * Acknowledge sinyal sesi uji coba dari layar kiosk sehingga tidak dipicu berulang
-   */
-  app.post('/api/system/ack-test-trigger', async (request, reply) => {
-    const body = (request.body as any) || {};
-    const consumed = OwnerService.consumeTestTrigger(body.id);
-    sendSuccess(reply, {
-      acknowledged: consumed,
-    });
-  });
-
-  /**
-   * POST /api/system/sync-now
-   * Memicu sinkronisasi antrean tertunda segera ke Cloud & Supabase
-   */
-  app.post('/api/system/sync-now', async (_request, reply) => {
-    await app.syncQueueService.checkConnectivity();
-    const result = await app.syncQueueService.drainQueue();
-    const status = app.syncQueueService.getStatus();
-    sendSuccess(reply, {
-      ...result,
-      status,
-      message: result.processed > 0
-        ? `Berhasil memproses ${result.succeeded} dari ${result.processed} sesi tertunda.`
-        : 'Tidak ada sesi tertunda dalam antrean.',
-    });
-  });
-
-  /**
-   * GET /api/system/timing-config & GET /api/system/timing (Alias)
-   * Mengambil konfigurasi interval auto-sync dan pembersihan file disk
-   */
-  const handleGetTiming = async (_request: any, reply: any) => {
-    const config = app.timingConfigService.getConfig();
-    sendSuccess(reply, config);
-  };
-  app.get('/api/system/timing-config', handleGetTiming);
-  app.get('/api/system/timing', handleGetTiming);
-
-  /**
-   * PUT /api/system/timing-config & PUT /api/system/timing (Alias)
-   * Memperbarui interval auto-sync, retensi cetak, dan pembersihan otomatis
-   */
-  const handlePutTiming = async (request: any, reply: any) => {
-    const body = (request.body as any) || {};
-    const updated = await app.timingConfigService.updateConfig(body);
-    sendSuccess(reply, {
-      ...updated,
-      message: 'Konfigurasi waktu sinkronisasi dan pembersihan berhasil disimpan.',
-    });
-  };
-  app.put('/api/system/timing-config', handlePutTiming);
-  app.put('/api/system/timing', handlePutTiming);
 }
-
-

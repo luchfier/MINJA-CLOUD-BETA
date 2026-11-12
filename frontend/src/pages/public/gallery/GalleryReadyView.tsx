@@ -29,12 +29,12 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
   token,
   expiresAt,
   createdAt,
-  studioAddress,
   items,
 }) => {
   const [activeTab, setActiveTab] = useState<'strip' | 'single' | 'live'>('strip');
   const [currentStripIndex, setCurrentStripIndex] = useState(0);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [isZipping, setIsZipping] = useState(false);
   const [zipSuccess, setZipSuccess] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -222,7 +222,54 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
     }
   };
 
-  const triggerDownload = (url: string, filename: string) => {
+  /**
+   * Universal Download Engine (3-Tier):
+   * Tier 1: Web Share API (iOS Safari 15+ & Android Chrome) -> Simpan langsung ke Galeri Foto HP (Camera Roll)
+   * Tier 2: Same-origin Blob Object URL (Desktop Windows, Mac, Linux, Android) -> Direct download tanpa tab baru
+   * Tier 3: Direct Attachment Fallback -> /api/public/gallery/:sessionId/download/:fileName
+   */
+  const universalDownload = async (url: string, filename: string, key?: string) => {
+    if (key) setDownloadingKey(key);
+    try {
+      // 1. Ambil data biner sebagai Blob melalui fetch (CORS)
+      const res = await fetch(url, { mode: 'cors' });
+      if (res.ok) {
+        const blob = await res.blob();
+
+        // TIER 1: Khusus Mobile (iOS Safari & Android) -> Simpan langsung ke Galeri Foto HP via Web Share API
+        if (typeof navigator !== 'undefined' && 'canShare' in navigator) {
+          const mimeType = blob.type || (filename.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg');
+          const file = new File([blob], filename, { type: mimeType });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: 'Minja Photobooth',
+            });
+            return;
+          }
+        }
+
+        // TIER 2: Desktop (Windows / Mac / Linux) & Android Chrome -> Direct Auto Download
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+        return;
+      }
+    } catch (err: any) {
+      // Jika pengguna membatalkan drawer share iOS/Android (AbortError), hentikan tanpa error tab baru
+      if (err?.name === 'AbortError') {
+        return;
+      }
+    } finally {
+      if (key) setDownloadingKey(null);
+    }
+
+    // TIER 3: Fallback darurat jika fetch diblokir (cross-origin / firewall)
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -232,22 +279,24 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
     document.body.removeChild(a);
   };
 
-  const handleSaveCurrentStrip = () => {
+  const handleSaveCurrentStrip = async () => {
     const selectedItem = displayFrames[currentStripIndex] || displayFrames[0];
     const downloadUrl = selectedItem?.url || '#';
-    triggerDownload(downloadUrl, `Minja_Foto_Frame_${currentStripIndex + 1}_${sessionId}.jpg`);
+    const filename = `Minja_Foto_Frame_${currentStripIndex + 1}_${sessionId}.jpg`;
+    await universalDownload(downloadUrl, filename, 'strip');
 
-    setSaveSuccess(`Download Frame ${currentStripIndex + 1} Berhasil!`);
+    setSaveSuccess(`Frame ${currentStripIndex + 1} Berhasil Disimpan!`);
     setTimeout(() => {
       setSaveSuccess(null);
-    }, 1800);
+    }, 2000);
   };
 
-  const handleSaveSinglePose = (poseItem: GalleryItem, index: number) => {
-    triggerDownload(poseItem.url, `Minja_Pose_Raw_${index + 1}_${sessionId}.jpg`);
+  const handleSaveSinglePose = async (poseItem: GalleryItem, index: number) => {
+    const filename = `Minja_Pose_Raw_${index + 1}_${sessionId}.jpg`;
+    await universalDownload(poseItem.url, filename, `pose_${index}`);
   };
 
-  const handleSaveLiveVideo = () => {
+  const handleSaveLiveVideo = async () => {
     const videoToSave = activeVideo || videoItems[0] || currentItems.find((i) => i.url.endsWith('.mp4'));
     if (videoToSave) {
       const name = (videoToSave.fileName || videoToSave.url).toLowerCase();
@@ -257,8 +306,13 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
       const customName = isSlideshow
         ? `Minja_Slideshow_${sessionId}.mp4`
         : `Minja_Live_Desain_${frameNum}_${sessionId}.mp4`;
-      triggerDownload(videoToSave.url, customName);
+      await universalDownload(videoToSave.url, customName, 'video');
     }
+  };
+
+  const handleSaveZoomPhoto = async () => {
+    if (!zoomPhotoUrl) return;
+    await universalDownload(zoomPhotoUrl, `Minja_Foto_HD_${sessionId}.jpg`, 'zoom');
   };
 
   const handleCopyGalleryLink = () => {
@@ -280,7 +334,12 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
   const handleDownloadZip = () => {
     setIsZipping(true);
     const zipUrl = `/api/public/gallery/${encodeURIComponent(sessionId)}/download-zip?token=${encodeURIComponent(token)}`;
-    triggerDownload(zipUrl, `Minja_Semua_Foto_${sessionId}.zip`);
+    const link = document.createElement('a');
+    link.href = zipUrl;
+    link.download = `Minja_Semua_Foto_${sessionId}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 
     setTimeout(() => {
       setIsZipping(false);
@@ -291,15 +350,8 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
 
   return (
     <div className="w-full max-w-md mx-auto space-y-3.5 animate-in fade-in duration-300 pb-10">
-      {/* 1. Informasi Subheader: Alamat > No Resi > Tanggal Sesi (Sesuai Urutan Standar Minja) */}
+      {/* 1. Informasi Subheader: No Resi & Tanggal Sesi */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-left px-0.5 mt-0.5 mb-1.5">
-        <div className="flex items-center gap-1 min-w-0">
-          <span className="material-symbols-outlined text-[15px] text-[#47464b] shrink-0">location_on</span>
-          <span className="text-[11.5px] text-[#1a1b22] font-semibold font-['JetBrains_Mono'] truncate">
-            {studioAddress || 'Lokasi Booth Minja Studio'}
-          </span>
-        </div>
-        <span className="text-zinc-300 text-[10px] shrink-0">•</span>
         <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-200/80 px-1.5 py-0.5 rounded font-['JetBrains_Mono'] shrink-0">
           #{sessionCode ? sessionCode.replace(/^#+/, '') : formatSessionDigits(sessionId)}
         </span>
@@ -515,17 +567,20 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                 <button
                   type="button"
                   onClick={handleSaveCurrentStrip}
+                  disabled={downloadingKey === 'strip'}
                   className={`w-full h-11 rounded-xl border border-zinc-200/80 flex items-center justify-center gap-2 active:scale-[0.98] transition-all duration-150 text-[13px] font-semibold cursor-pointer shadow-sm ${
                     saveSuccess
                       ? 'bg-emerald-50 text-emerald-600 border-emerald-300'
                       : 'bg-white hover:bg-zinc-50 text-[#1a1b22]'
                   }`}
                 >
-                  <span className="material-symbols-outlined text-[18px]">
-                    {saveSuccess ? 'check_circle' : 'download'}
+                  <span className={`material-symbols-outlined text-[18px] ${downloadingKey === 'strip' ? 'animate-spin' : ''}`}>
+                    {downloadingKey === 'strip' ? 'progress_activity' : saveSuccess ? 'check_circle' : 'download'}
                   </span>
                   <span>
-                    {saveSuccess || `Download Frame ${currentStripIndex + 1}`}
+                    {downloadingKey === 'strip'
+                      ? 'Menyiapkan Foto...'
+                      : saveSuccess || `Download Frame ${currentStripIndex + 1}`}
                   </span>
                 </button>
               </div>
@@ -570,10 +625,13 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                     <button
                       type="button"
                       onClick={() => handleSaveSinglePose(photo, pIdx)}
-                      className="w-full mt-2 h-9 rounded-lg bg-white hover:bg-zinc-50 border border-zinc-200/80 flex items-center justify-center gap-1 text-[#1a1b22] active:scale-95 transition-transform duration-100 text-[12px] font-semibold cursor-pointer shadow-2xs"
+                      disabled={downloadingKey === `pose_${pIdx}`}
+                      className="w-full mt-2 h-9 rounded-lg bg-white hover:bg-zinc-50 border border-zinc-200/80 flex items-center justify-center gap-1 text-[#1a1b22] active:scale-95 transition-transform duration-100 text-[12px] font-semibold cursor-pointer shadow-2xs disabled:opacity-75"
                     >
-                      <span className="material-symbols-outlined text-[15px]">download</span>
-                      <span>Download</span>
+                      <span className={`material-symbols-outlined text-[15px] ${downloadingKey === `pose_${pIdx}` ? 'animate-spin' : ''}`}>
+                        {downloadingKey === `pose_${pIdx}` ? 'progress_activity' : 'download'}
+                      </span>
+                      <span>{downloadingKey === `pose_${pIdx}` ? 'Menyiapkan...' : 'Download'}</span>
                     </button>
                   </div>
                 ))
@@ -644,11 +702,16 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
                     <button
                       type="button"
                       onClick={handleSaveLiveVideo}
-                      className="w-full h-11 rounded-xl bg-white hover:bg-zinc-50 border border-zinc-200/80 flex items-center justify-center gap-2 text-[#1a1b22] active:scale-95 transition-transform duration-100 text-[13px] font-semibold cursor-pointer shadow-2xs"
+                      disabled={downloadingKey === 'video'}
+                      className="w-full h-11 rounded-xl bg-white hover:bg-zinc-50 border border-zinc-200/80 flex items-center justify-center gap-2 text-[#1a1b22] active:scale-95 transition-transform duration-100 text-[13px] font-semibold cursor-pointer shadow-2xs disabled:opacity-75"
                     >
-                      <span className="material-symbols-outlined text-[18px]">download</span>
+                      <span className={`material-symbols-outlined text-[18px] ${downloadingKey === 'video' ? 'animate-spin' : ''}`}>
+                        {downloadingKey === 'video' ? 'progress_activity' : 'download'}
+                      </span>
                       <span>
-                        {activeVideo.fileName?.toLowerCase().includes('slideshow')
+                        {downloadingKey === 'video'
+                          ? 'Menyiapkan Video...'
+                          : activeVideo.fileName?.toLowerCase().includes('slideshow')
                           ? 'Download Video Slideshow'
                           : `Download ${getVideoLabel(activeVideo, selectedVideoIndex).replace(/^[^\w]+/, '')}`}
                       </span>
@@ -766,11 +829,14 @@ export const GalleryReadyView: React.FC<GalleryReadyViewProps> = ({
             />
             <button
               type="button"
-              onClick={() => triggerDownload(zoomPhotoUrl, `Minja_Foto_HD_${sessionId}.jpg`)}
-              className="mt-3.5 px-6 py-2.5 rounded-full bg-white text-black font-semibold text-[13px] flex items-center gap-2 shadow-lg active:scale-95 transition-transform cursor-pointer hover:bg-zinc-100"
+              onClick={handleSaveZoomPhoto}
+              disabled={downloadingKey === 'zoom'}
+              className="mt-3.5 px-6 py-2.5 rounded-full bg-white text-black font-semibold text-[13px] flex items-center gap-2 shadow-lg active:scale-95 transition-transform cursor-pointer hover:bg-zinc-100 disabled:opacity-75"
             >
-              <span className="material-symbols-outlined text-[18px]">download</span>
-              <span>Download</span>
+              <span className={`material-symbols-outlined text-[18px] ${downloadingKey === 'zoom' ? 'animate-spin' : ''}`}>
+                {downloadingKey === 'zoom' ? 'progress_activity' : 'download'}
+              </span>
+              <span>{downloadingKey === 'zoom' ? 'Menyiapkan...' : 'Download'}</span>
             </button>
           </div>
         </div>

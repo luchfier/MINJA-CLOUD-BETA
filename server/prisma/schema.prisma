@@ -16,13 +16,15 @@ datasource db {
 // 1. Admin — Satu admin per instalasi (singleton)
 // ============================================================
 model Admin {
-  id              String   @id @default(cuid())
-  pinHash         String   @map("pin_hash")     // Argon2id hash
-  failedAttempts  Int      @default(0) @map("failed_attempts")
+  id              String    @id @default(cuid())
+  username        String    @unique @default("admin")
+  email           String?   @unique
+  passwordHash    String    @map("password_hash") // Argon2id hash
+  failedAttempts  Int       @default(0) @map("failed_attempts")
   lockedUntil     DateTime? @map("locked_until")
   lastLoginAt     DateTime? @map("last_login_at")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   auditLogs       AuditLog[]
 
@@ -46,8 +48,8 @@ model Settings {
   attractVideoUrl          String?  @map("attract_video_url")
   
   // Kontak & Promosi Studio (Web Promosi)
-  whatsappNumber           String?  @default("6281234567890") @map("whatsapp_number")
-  instagramHandle          String?  @default("@minjastudio") @map("instagram_handle")
+  whatsappNumber           String?  @default("6281321699090") @map("whatsapp_number")
+  instagramHandle          String?  @default("@minjabooth") @map("instagram_handle")
   studioAddress            String?  @default("Lokasi Booth Minja Studio") @map("studio_address")
   promoHeadline            String?  @default("Abadikan Momen Terbaik dengan Kualitas Studio Lab") @map("promo_headline")
   promoSubheadline         String?  @default("Nikmati pengalaman berfoto mandiri tanpa canggung. Cetak foto fisik studio tahan air dalam hitungan detik, pilihan frame strip eksklusif, plus unduhan digital langsung ke smartphone Anda.") @map("promo_subheadline")
@@ -546,8 +548,10 @@ model Partner {
   name            String      // contoh: "PT Berkah Jaya / Mitra Mall A"
   email           String      @unique
   passwordHash    String      @map("password_hash")
-  rawPassword     String?     @map("raw_password") // Password plain tersimpan untuk inspeksi Super Admin via Eye toggle
   phone           String?
+  failedAttempts  Int         @default(0) @map("failed_attempts")
+  lockedUntil     DateTime?   @map("locked_until")
+  lastLoginAt     DateTime?   @map("last_login_at")
   revenueSharePct Int         @default(70) @map("revenue_share_pct") // Persentase bagi hasil mitra (0-100%)
   receiptHeader   String?     @map("receipt_header") // Kustom header cetak struk kasir
   receiptFooter   String?     @map("receipt_footer") // Kustom footer pesan cetak struk kasir
@@ -575,14 +579,16 @@ model Partner {
 // 19. Operator — Staf Kasir Lapangan Booth
 // ============================================================
 model Operator {
-  id          String       @id @default(cuid())
-  partnerId   String       @map("partner_id")
-  kioskId     String?      @map("kiosk_id")
-  name        String       // contoh: "Budi Kasir Shift Pagi"
-  username    String       @unique // username login kasir
-  pinHash     String       @map("pin_hash") // PIN kasir
-  isActive    Boolean      @default(true) @map("is_active")
-  lastLoginAt DateTime?    @map("last_login_at")
+  id              String       @id @default(cuid())
+  partnerId       String       @map("partner_id")
+  kioskId         String?      @map("kiosk_id")
+  name            String       // contoh: "Budi Kasir Shift Pagi"
+  username        String       @unique // username login kasir
+  pinHash         String       @map("pin_hash") // PIN kasir
+  failedAttempts  Int          @default(0) @map("failed_attempts")
+  lockedUntil     DateTime?    @map("locked_until")
+  isActive        Boolean      @default(true) @map("is_active")
+  lastLoginAt     DateTime?    @map("last_login_at")
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 

@@ -35,7 +35,7 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
   SMTP_USER: z.string().default(''),
   SMTP_PASS: z.string().default(''),
-  SMTP_FROM: z.string().default('Minja Photobooth <noreply@minjaphotobooth.com>'),
+  SMTP_FROM: z.string().default('Minja Photobooth <noreply@minja.my.id>'),
 
   // Resend Email REST API
   RESEND_API_KEY: z.string().default(''),
@@ -49,7 +49,7 @@ const envSchema = z.object({
   S3_REGION: z.string().default('auto'),
 
   // Digital Gallery Public Domain
-  GALLERY_BASE_URL: z.string().default('https://gallery.minja.com'),
+  GALLERY_BASE_URL: z.string().default('https://gallery.minja.my.id'),
   R2_PUBLIC_DOMAIN: z.string().default(''),
 
   // Kiosk Identification
@@ -63,7 +63,7 @@ const envSchema = z.object({
     .default('development'),
   PORT: z
     .string()
-    .default('4000')
+    .default('3000')
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1).max(65535)),
   LOG_LEVEL: z

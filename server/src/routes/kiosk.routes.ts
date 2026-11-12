@@ -28,10 +28,6 @@ const lockKioskSchema = z.object({
   reason: z.string().optional(),
 });
 
-const refillPaperSchema = z.object({
-  capacity: z.number().int().min(50).max(2000).optional(),
-});
-
 const heartbeatSchema = z.object({
   status: z.enum(['ONLINE', 'OFFLINE', 'IN_SESSION', 'PRINTING', 'MAINTENANCE']).optional(),
   paperRemaining: z.number().int().min(0).optional(),
@@ -96,21 +92,6 @@ export async function kioskRoutes(app: FastifyInstance): Promise<void> {
       const params = request.params as { id: string };
       const body = lockKioskSchema.parse(request.body);
       const result = await kioskService.toggleLock(params.id, body.enabled, body.reason);
-      sendSuccess(reply, result);
-    }
-  );
-
-  /**
-   * POST /api/owner/kiosks/:id/refill-paper
-   * Reset sisa kertas foto ke kapasitas roll
-   */
-  app.post(
-    '/api/owner/kiosks/:id/refill-paper',
-    { preHandler: [requireAdminAuth] },
-    async (request, reply) => {
-      const params = request.params as { id: string };
-      const body = refillPaperSchema.parse(request.body || {});
-      const result = await kioskService.refillPaper(params.id, body.capacity);
       sendSuccess(reply, result);
     }
   );
@@ -194,27 +175,4 @@ export async function kioskRoutes(app: FastifyInstance): Promise<void> {
       sendSuccess(reply, result);
     }
   );
-
-  /**
-   * GET /api/kiosk/activation-status
-   * Memeriksa apakah mesin booth ini sudah memiliki kunci aktivasi berlisensi resmi
-   */
-  app.get('/api/kiosk/activation-status', async (_request, reply) => {
-    const status = await kioskService.getActivationStatus();
-    sendSuccess(reply, status);
-  });
-
-  /**
-   * POST /api/kiosk/activate
-   * Memasukkan BOOTH_API_KEY dari layar aktivasi Kiosk untuk mengaktifkan mesin
-   */
-  app.post('/api/kiosk/activate', async (request, reply) => {
-    const body = z.object({
-      apiKey: z.string().min(5, 'API Key minimal 5 karakter'),
-      hardwareId: z.string().optional(),
-    }).parse(request.body);
-    const result = await kioskService.activateKiosk(body.apiKey, body.hardwareId);
-    sendSuccess(reply, result);
-  });
 }
-

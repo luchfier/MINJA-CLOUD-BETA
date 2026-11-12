@@ -19,7 +19,7 @@ export class EmailService {
   private isConfigured: boolean = false;
   private resendApiKey: string = '';
   private resendFrom: string = 'Minja Photobooth <onboarding@resend.dev>';
-  private fromAddress: string = 'Minja Photobooth <noreply@minjaphotobooth.com>';
+  private fromAddress: string = 'Minja Photobooth <noreply@minja.my.id>';
 
   constructor() {
     this.tryInit();
@@ -30,7 +30,7 @@ export class EmailService {
       const env = getEnv();
       this.resendApiKey = (env.RESEND_API_KEY || '').trim();
       this.resendFrom = env.RESEND_FROM || 'Minja Photobooth <onboarding@resend.dev>';
-      this.fromAddress = env.SMTP_FROM || 'Minja Photobooth <noreply@minjaphotobooth.com>';
+      this.fromAddress = env.SMTP_FROM || 'Minja Photobooth <noreply@minja.my.id>';
 
       if (this.resendApiKey.length > 0) {
         this.isConfigured = true;

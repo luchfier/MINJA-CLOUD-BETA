@@ -18,29 +18,19 @@ import { adminAuthRoutes } from './routes/admin-auth.routes.js';
 import { packageRoutes } from './routes/package.routes.js';
 import { sessionRoutes } from './routes/session.routes.js';
 import { paymentRoutes } from './routes/payment.routes.js';
-import { templateRoutes } from './routes/template.routes.js';
 import { systemRoutes } from './routes/system.routes.js';
 import { voucherRoutes } from './routes/voucher.routes.js';
-import { assetRoutes } from './routes/asset.routes.js';
-import { integrationRoutes } from './routes/integration.routes.js';
 import { deliveryRoutes } from './routes/delivery.routes.js';
-import { reportRoutes } from './routes/report.routes.js';
-import { auditRoutes } from './routes/audit.routes.js';
 import { settingsRoutes } from './routes/settings.routes.js';
 import { ownerRoutes } from './routes/owner.routes.js';
 import { kioskRoutes } from './routes/kiosk.routes.js';
 import { partnerRoutes } from './routes/partner.routes.js';
 import { operatorRoutes } from './routes/operator.routes.js';
 
-import { SyncQueueService } from './services/syncQueue.service.js';
-import { TimingConfigService } from './services/timingConfig.service.js';
-
 // Extend Fastify types
 declare module 'fastify' {
   interface FastifyInstance {
     prisma: PrismaClient;
-    syncQueueService: SyncQueueService;
-    timingConfigService: TimingConfigService;
   }
 }
 
@@ -76,10 +66,6 @@ export async function buildCloudApp() {
     log: ['warn', 'error'],
   });
   app.decorate('prisma', prisma);
-  const syncQueueService = new SyncQueueService(prisma);
-  app.decorate('syncQueueService', syncQueueService);
-  const timingConfigService = new TimingConfigService();
-  app.decorate('timingConfigService', timingConfigService);
 
   // Lifecycle hooks
   app.addHook('onReady', async () => {
@@ -152,14 +138,9 @@ export async function buildCloudApp() {
   await app.register(packageRoutes);
   await app.register(sessionRoutes);
   await app.register(paymentRoutes);
-  await app.register(templateRoutes);
   await app.register(systemRoutes);
   await app.register(voucherRoutes);
-  await app.register(assetRoutes);
-  await app.register(integrationRoutes);
   await app.register(deliveryRoutes);
-  await app.register(reportRoutes);
-  await app.register(auditRoutes);
   await app.register(settingsRoutes);
   await app.register(ownerRoutes);
   await app.register(kioskRoutes);

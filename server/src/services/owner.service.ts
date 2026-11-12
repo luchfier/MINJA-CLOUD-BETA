@@ -1,484 +1,20 @@
 // server/src/services/owner.service.ts
-// Service Pengelolaan Jarak Jauh (Remote Owner Telemetry & Kiosk Management)
-// Dirancang untuk akses via Cloudflare Tunnel / Jaringan Lokal
+// Service Super Admin / Owner Portal Multi-Tenant Network Analytics & Operations
 
 import type { PrismaClient } from '@prisma/client';
-import { SyncQueueService } from './syncQueue.service.js';
-import { cleanupService } from './cleanup.service.js';
-import { StorageService } from './storage.service.js';
 import { EmailService } from './email.service.js';
+import { calculateWibDateRange } from './partner.service.js';
 import { formatSessionCode } from '../utils/session.util.js';
 import { humanLogger } from '../utils/humanLogger.js';
 import { getEnv } from '../config/env.js';
-import { hashPin, decryptAtRest } from '../utils/auth.util.js';
+import { hashPin } from '../utils/auth.util.js';
 import { AppError, ErrorCode } from '../types/common.types.js';
 
-export interface TunnelConfig {
-  tunnelUrl: string;
-  provider: 'cloudflare' | 'custom';
-  updatedAt: string;
-  isActive: boolean;
-}
-
-export interface OwnerTelemetryDto {
-  kioskStatus: 'IDLE' | 'IN_SESSION' | 'PRINTING' | 'MAINTENANCE' | 'OFFLINE';
-  isMaintenance: boolean;
-  maintenanceReason?: string;
-  boothName: string;
-  activeSession: {
-    sessionId: string;
-    sessionCode: string;
-    packageName: string;
-    state: string;
-    totalPrice: number;
-    totalPrints: number;
-  } | null;
-  financialToday: {
-    totalRevenue: number;
-    qrisRevenue: number;
-    cashRevenue: number;
-    transactionsCount: number;
-    totalSessions: number;
-    completedSessions: number;
-    totalPrints: number;
-    estimatedPaperRemaining: number;
-    paperRollCapacity: number;
-  };
-  hardware: {
-    selectedPrinter: string;
-    isPrinterOnline: boolean;
-    detectedPrintersCount: number;
-  };
-  syncStatus: {
-    isOnline: boolean;
-    isDatabaseConnected: boolean;
-    pendingQueueCount: number;
-    failedQueueCount: number;
-    lastSyncAt: string | null;
-  };
-  tunnel: TunnelConfig;
-  serverTime: string;
-}
-
-export interface TestSessionTrigger {
-  id: string;
-  packageId?: string;
-  virtualPrint: boolean;
-  createdAt: number;
-}
-
 export class OwnerService {
-  public static currentMaintenanceReason = 'Pengisian ulang kertas foto / pemeliharaan berkala';
-  public static pendingTestTrigger: TestSessionTrigger | null = null;
-
-  public static getMaintenanceReason(): string {
-    return OwnerService.currentMaintenanceReason;
-  }
-
-  public static getPendingTestTrigger(): TestSessionTrigger | null {
-    if (OwnerService.pendingTestTrigger) {
-      // Auto-expire setelah 60 detik jika tidak di-acknowledge oleh kiosk
-      if (Date.now() - OwnerService.pendingTestTrigger.createdAt > 60000) {
-        OwnerService.pendingTestTrigger = null;
-        return null;
-      }
-    }
-    return OwnerService.pendingTestTrigger;
-  }
-
-  public static consumeTestTrigger(id?: string): boolean {
-    if (!OwnerService.pendingTestTrigger) return false;
-    if (!id || OwnerService.pendingTestTrigger.id === id) {
-      OwnerService.pendingTestTrigger = null;
-      return true;
-    }
-    return false;
-  }
-
-  private currentTunnelConfig: TunnelConfig;
-  private storageService: StorageService;
   private emailService: EmailService;
 
-  constructor(
-    private prisma: PrismaClient,
-    private syncQueueService: SyncQueueService
-  ) {
-    let publicUrl = '';
-    try {
-      publicUrl = getEnv().GALLERY_BASE_URL || '';
-    } catch {
-      // fallback jika env belum dimuat pada initial unit testing
-    }
-
-    this.currentTunnelConfig = {
-      tunnelUrl: publicUrl,
-      provider: 'custom',
-      updatedAt: new Date().toISOString(),
-      isActive: Boolean(publicUrl),
-    };
-
-    this.storageService = new StorageService();
+  constructor(private prisma: PrismaClient) {
     this.emailService = new EmailService();
-  }
-
-  public getTunnelConfig(): TunnelConfig {
-    if (!this.currentTunnelConfig.tunnelUrl) {
-      try {
-        const publicUrl = getEnv().GALLERY_BASE_URL || '';
-        if (publicUrl) {
-          this.currentTunnelConfig.tunnelUrl = publicUrl;
-          this.currentTunnelConfig.isActive = true;
-        }
-      } catch {}
-    }
-    return { ...this.currentTunnelConfig };
-  }
-
-  public setTunnelUrl(url: string, isActive = true): TunnelConfig {
-    this.currentTunnelConfig = {
-      tunnelUrl: url.trim(),
-      provider: 'custom',
-      updatedAt: new Date().toISOString(),
-      isActive,
-    };
-    humanLogger.info('CONFIG', `Public Portal URL diperbarui: ${url || '(dinonaktifkan)'}`);
-    return this.getTunnelConfig();
-  }
-
-  /**
-   * Mengambil Telemetri Real-Time Booth untuk Owner
-   */
-  public async getTelemetry(): Promise<OwnerTelemetryDto> {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-
-    // 1. Data Pengaturan & Status Maintenance
-    let boothName = 'Minja Studio Booth';
-    let isMaintenance = false;
-    let selectedPrinterName = 'Default Printer';
-
-    try {
-      const settings = await this.prisma.settings.findFirst();
-      if (settings) {
-        boothName = settings.boothName || settings.brandTitle || boothName;
-        isMaintenance = settings.maintenanceMode;
-        selectedPrinterName = settings.selectedPrinterName || selectedPrinterName;
-      }
-    } catch {
-      // Degraded mode jika DB offline
-    }
-
-    // 2. Data Finansial Hari Ini (Khusus transaksi komersial riil)
-    let totalRevenue = 0;
-    let qrisRevenue = 0;
-    let cashRevenue = 0;
-    let transactionsCount = 0;
-
-    try {
-      const todayPayments = await this.prisma.payment.findMany({
-        where: {
-          transactionStatus: 'settlement',
-          createdAt: { gte: startOfToday },
-          grossAmount: { gt: 0 },
-          paymentType: { not: 'TEST_BYPASS' },
-          orderId: { not: { startsWith: 'TEST-' } },
-        },
-      });
-
-      for (const p of todayPayments) {
-        totalRevenue += p.grossAmount;
-        transactionsCount++;
-        if (p.paymentType === 'cash') {
-          cashRevenue += p.grossAmount;
-        } else {
-          qrisRevenue += p.grossAmount;
-        }
-      }
-    } catch { }
-
-    // 3. Data Sesi & Lembar Cetak Hari Ini (Khusus sesi riil komersial)
-    let totalSessions = 0;
-    let completedSessions = 0;
-    let totalPrints = 0;
-    let activeSessionDto: OwnerTelemetryDto['activeSession'] = null;
-
-    try {
-      const todaySessions = await this.prisma.session.findMany({
-        where: {
-          createdAt: { gte: startOfToday },
-          totalPrice: { gt: 0 },
-        },
-        include: { package: true },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      totalSessions = todaySessions.length;
-
-      for (const s of todaySessions) {
-        totalPrints += s.totalPrints;
-        if (s.state === 'COMPLETED' || s.state === 'SHARING') {
-          completedSessions++;
-        }
-      }
-
-      // Cari sesi yang sedang aktif berjalan di layar booth
-      const currentActive = todaySessions.find(
-        (s) =>
-          !['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(s.state) &&
-          new Date(s.expiresAt) > now
-      );
-
-      if (currentActive) {
-        activeSessionDto = {
-          sessionId: currentActive.id,
-          sessionCode: formatSessionCode(currentActive.id),
-          packageName: currentActive.package?.name || 'Paket Foto',
-          state: currentActive.state,
-          totalPrice: currentActive.totalPrice,
-          totalPrints: currentActive.totalPrints,
-        };
-      }
-    } catch { }
-
-    // 4. Hitung Estimasi Sisa Kertas (Kapasitas roll standar 400 lembar per roll)
-    const paperRollCapacity = 400;
-    const estimatedPaperRemaining = Math.max(0, paperRollCapacity - (totalPrints % paperRollCapacity));
-
-    // 5. Hardware Status (telemetri printer dari armada booth online)
-    let detectedPrintersCount = 0;
-    try {
-      const activePrinterKiosks = await this.prisma.kiosk.count({
-        where: { printerStatus: 'READY' },
-      });
-      detectedPrintersCount = activePrinterKiosks;
-    } catch { }
-
-    // 6. Sync Queue Status
-    const queueStatus = this.syncQueueService
-      ? this.syncQueueService.getStatus()
-      : { isOnline: true, isDatabaseConnected: true, pendingCount: 0, failedCount: 0, lastSyncAt: null };
-
-    // 7. Tentukan Kiosk Status Keseluruhan
-    let kioskStatus: OwnerTelemetryDto['kioskStatus'] = 'IDLE';
-    if (isMaintenance) {
-      kioskStatus = 'MAINTENANCE';
-    } else if (activeSessionDto) {
-      kioskStatus = activeSessionDto.state === 'PRINTING' ? 'PRINTING' : 'IN_SESSION';
-    }
-
-    return {
-      kioskStatus,
-      isMaintenance,
-      maintenanceReason: isMaintenance ? OwnerService.currentMaintenanceReason : undefined,
-      boothName,
-      activeSession: activeSessionDto,
-      financialToday: {
-        totalRevenue,
-        qrisRevenue,
-        cashRevenue,
-        transactionsCount,
-        totalSessions,
-        completedSessions,
-        totalPrints,
-        estimatedPaperRemaining,
-        paperRollCapacity,
-      },
-      hardware: {
-        selectedPrinter: selectedPrinterName,
-        isPrinterOnline: detectedPrintersCount > 0,
-        detectedPrintersCount,
-      },
-      syncStatus: {
-        isOnline: queueStatus.isOnline,
-        isDatabaseConnected: queueStatus.isDatabaseConnected,
-        pendingQueueCount: queueStatus.pendingCount,
-        failedQueueCount: queueStatus.failedCount,
-        lastSyncAt: queueStatus.lastSyncAt,
-      },
-      tunnel: this.getTunnelConfig(),
-      serverTime: now.toISOString(),
-    };
-  }
-
-  /**
-   * Kunci / Buka Kiosk (Toggle Mode Maintenance)
-   */
-  public async toggleMaintenanceMode(
-    enabled: boolean,
-    reason?: string
-  ): Promise<{ maintenanceMode: boolean; reason?: string }> {
-    try {
-      if (enabled && reason && reason.trim()) {
-        OwnerService.currentMaintenanceReason = reason.trim();
-      }
-
-      const settings = await this.prisma.settings.findFirst();
-      if (settings) {
-        await this.prisma.settings.update({
-          where: { id: settings.id },
-          data: { maintenanceMode: enabled },
-        });
-      }
-
-      await this.prisma.auditLog.create({
-        data: {
-          action: enabled ? 'REMOTE_KIOSK_LOCKED' : 'REMOTE_KIOSK_UNLOCKED',
-          details: {
-            reason: enabled ? OwnerService.currentMaintenanceReason : undefined,
-            source: 'Admin / Owner Portal',
-            timestamp: new Date().toISOString(),
-          },
-        },
-      }).catch(() => { });
-
-      if (enabled) {
-        humanLogger.warn('SERVER', `🔒 Kiosk DIKUNCI: ${OwnerService.currentMaintenanceReason}`);
-      } else {
-        humanLogger.success('SERVER', '🔓 Kiosk DIBUKA kembali dan siap melayani');
-      }
-
-      return {
-        maintenanceMode: enabled,
-        reason: enabled ? OwnerService.currentMaintenanceReason : undefined,
-      };
-    } catch (err) {
-      humanLogger.error('SERVER', 'Gagal mengubah status maintenance mode', err);
-      return { maintenanceMode: enabled };
-    }
-  }
-
-  /**
-   * Memicu Sesi Uji Coba Kiosk (Bypass Pembayaran untuk Instalasi/Kalibrasi)
-   * Sesi ini 100% terisolasi dari laporan keuangan dan omzet.
-   */
-  public async triggerTestSession(
-    packageId?: string,
-    virtualPrint: boolean = true
-  ): Promise<TestSessionTrigger> {
-    const trigger: TestSessionTrigger = {
-      id: `TEST-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-      packageId,
-      virtualPrint,
-      createdAt: Date.now(),
-    };
-    OwnerService.pendingTestTrigger = trigger;
-
-    await this.prisma.auditLog.create({
-      data: {
-        action: 'TEST_SESSION_TRIGGERED',
-        details: {
-          triggerId: trigger.id,
-          virtualPrint,
-          packageId,
-          source: 'Owner Portal (Remote)',
-          timestamp: new Date().toISOString(),
-        },
-      },
-    }).catch(() => {});
-
-    humanLogger.info('TEST_SESSION', `🚀 Sesi Uji Coba Kiosk dipicu dari Owner Portal (Virtual Print: ${virtualPrint})`);
-    return trigger;
-  }
-
-  /**
-   * Mengambil riwayat sesi hari ini lengkap dengan thumbnail & status pengiriman
-   */
-  public async getTodaySessions(limit = 50): Promise<any[]> {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-
-    try {
-      const sessions = await this.prisma.session.findMany({
-        where: { createdAt: { gte: startOfToday } },
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          package: true,
-          payments: true,
-          deliveryJobs: true,
-        },
-      });
-
-      return sessions.map((s) => {
-        // Ambil file foto lokal yang tersedia
-        const files = this.storageService.getSessionFiles(s.id);
-        const lastPayment = s.payments[s.payments.length - 1];
-        const emailJob = s.deliveryJobs.find((j) => j.channel === 'email');
-
-        return {
-          id: s.id,
-          sessionCode: formatSessionCode(s.id),
-          packageName: s.package?.name || 'Paket Foto',
-          state: s.state,
-          totalPrice: s.totalPrice,
-          totalPrints: s.totalPrints,
-          createdAt: s.createdAt.toISOString(),
-          payment: lastPayment
-            ? {
-              orderId: lastPayment.orderId,
-              paymentType: lastPayment.paymentType,
-              grossAmount: lastPayment.grossAmount,
-              status: lastPayment.transactionStatus,
-              settlementTime: lastPayment.settlementTime?.toISOString() || null,
-            }
-            : null,
-          emailDelivery: emailJob
-            ? {
-              status: emailJob.status,
-              email: emailJob.email,
-              sentAt: emailJob.sentAt?.toISOString() || null,
-            }
-            : null,
-          files: files.map((f: { fileName: string; publicUrl: string; sizeBytes: number }) => ({
-            fileName: f.fileName,
-            url: f.publicUrl,
-            sizeBytes: f.sizeBytes,
-            category: f.fileName.includes('strip') || f.fileName.includes('frame')
-              ? 'Photo Frame'
-              : f.fileName.endsWith('.mp4')
-                ? 'Live Video'
-                : 'Single Cut',
-          })),
-        };
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * Memicu sinkronisasi manual antrean cloud
-   */
-  public async triggerForceSync(): Promise<{ processed: number; succeeded: number; failed: number }> {
-    humanLogger.sync('⚡ Owner memicu Force Sync Cloud dari jarak jauh');
-    return this.syncQueueService.drainQueue();
-  }
-
-  /**
-   * Memicu pembersihan disk sementara dari jarak jauh
-   */
-  public async triggerCleanup(): Promise<{ deleted: number; freedBytes: number }> {
-    humanLogger.cleanup('🧹 Owner memicu Pembersihan Disk dari jarak jauh');
-    return cleanupService.cleanOldPrintFiles(2);
-  }
-
-  /**
-   * Mendaftarkan perintah uji cetak ke antrean kiosk
-   */
-  public async triggerTestPrint(kioskId?: string): Promise<{ success: boolean; message: string }> {
-    if (kioskId) {
-      const { KioskService } = await import('./kiosk.service.js');
-      KioskService.queuePrintCommand(kioskId, {
-        id: `test_print_${Date.now()}`,
-        sessionId: 'TEST_PRINT',
-        copies: 1,
-        reason: 'Test print dari Owner Portal',
-        requestedBy: 'Owner',
-        createdAt: new Date().toISOString(),
-      });
-      return { success: true, message: `Perintah test print berhasil didaftarkan ke antrean booth [${kioskId}].` };
-    }
-    return { success: true, message: 'Test print acknowledge (pilih kiosk tujuan untuk cetak fisik).' };
   }
 
   /**
@@ -487,7 +23,11 @@ export class OwnerService {
   public async resendEmail(sessionId: string, targetEmail?: string): Promise<{ sent: boolean; message: string }> {
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
-      include: { deliveryJobs: true },
+      include: {
+        deliveryJobs: true,
+        kiosk: { select: { name: true } },
+        gallery: { select: { token: true } },
+      },
     });
 
     if (!session) {
@@ -499,8 +39,10 @@ export class OwnerService {
       throw new Error('Alamat email tujuan tidak ditemukan');
     }
 
-    const boothName = 'Minja Studio';
-    const galleryUrl = `http://localhost:3000/s/${session.id}`;
+    const boothName = session.kiosk?.name || 'Minja Photobooth';
+    const baseUrl = (getEnv().GALLERY_BASE_URL || 'https://gallery.minja.my.id').replace(/\/+$/, '');
+    const tokenQuery = session.gallery?.token ? `?token=${encodeURIComponent(session.gallery.token)}` : '';
+    const galleryUrl = `${baseUrl}/s/${encodeURIComponent(session.id)}${tokenQuery}`;
     const code = formatSessionCode(session.id);
 
     const res = await this.emailService.sendGalleryNotification(
@@ -524,49 +66,13 @@ export class OwnerService {
     partnerId?: string;
     kioskId?: string;
   }) {
-    // 1. Tentukan Rentang Waktu
-    const now = new Date();
-    let rangeStart = new Date(now);
-    let rangeEnd = new Date(now);
-    let periodLabel = 'Hari Ini';
+    // 1. Tentukan Rentang Waktu Presisi WIB (UTC+7)
     const period = options.period || 'today';
-
-    if (period === 'today') {
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Hari Ini';
-    } else if (period === 'yesterday') {
-      rangeStart.setDate(rangeStart.getDate() - 1);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setDate(rangeEnd.getDate() - 1);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Kemarin';
-    } else if (period === '7d') {
-      rangeStart.setDate(rangeStart.getDate() - 6);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = '7 Hari Terakhir';
-    } else if (period === '30d') {
-      rangeStart.setDate(rangeStart.getDate() - 29);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = '30 Hari Terakhir';
-    } else if (period === 'this_month') {
-      rangeStart.setDate(1);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = 'Bulan Ini';
-    } else if (period === 'last_month') {
-      rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0);
-      rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-      periodLabel = 'Bulan Lalu';
-    } else if (period === 'custom' && options.startDate && options.endDate) {
-      rangeStart = new Date(options.startDate);
-      rangeStart.setHours(0, 0, 0, 0);
-      rangeEnd = new Date(options.endDate);
-      rangeEnd.setHours(23, 59, 59, 999);
-      periodLabel = `${options.startDate} s/d ${options.endDate}`;
-    }
+    const { rangeStart, rangeEnd, periodLabel } = calculateWibDateRange(
+      period,
+      options.startDate,
+      options.endDate
+    );
 
     // 2. Ambil Semua Mitra & Booth Terdaftar
     const allPartners = await this.prisma.partner.findMany({
@@ -961,7 +467,6 @@ export class OwnerService {
         id: partner.id,
         name: partner.name,
         email: partner.email,
-        rawPassword: decryptAtRest((partner as any).rawPassword) || null,
         phone: partner.phone,
         revenueSharePct: partner.revenueSharePct,
         receiptHeader: partner.receiptHeader,
@@ -1096,12 +601,23 @@ export class OwnerService {
             select: { paymentType: true, transactionStatus: true, orderId: true },
           },
           deliveryJobs: { select: { channel: true, status: true, email: true, sentAt: true } },
+          photos: { select: { id: true, storageUrl: true }, take: 4 },
         },
       }),
     ]);
 
+    const r2Domain = (process.env.R2_PUBLIC_DOMAIN || 'https://tampung.minja.my.id').replace(/\/+$/, '');
+
     const items = sessions.map((s) => {
-      const files = this.storageService.getSessionFiles(s.id);
+      const files = s.photos && s.photos.length > 0
+        ? s.photos.map((p, idx) => ({
+            fileName: idx === 0 ? 'design_1.jpg' : `pose_${idx}.jpg`,
+            publicUrl: p.storageUrl || `${r2Domain}/${encodeURIComponent(s.id)}/design_1.jpg`,
+            sizeBytes: 0,
+          }))
+        : s.state === 'COMPLETED'
+          ? [{ fileName: 'design_1.jpg', publicUrl: `${r2Domain}/${encodeURIComponent(s.id)}/design_1.jpg`, sizeBytes: 0 }]
+          : [];
       const lastPayment = s.payments[0] || null;
       const emailJob = s.deliveryJobs.find((j) => j.channel === 'email');
 

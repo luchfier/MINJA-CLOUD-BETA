@@ -214,7 +214,36 @@ export class SettingsService {
       return cachedPublicSettings;
     }
 
-    let settings = await this.prisma.settings.findFirst();
+    const publicSelect = {
+      id: true,
+      boothName: true,
+      brandTitle: true,
+      welcomeText: true,
+      primaryColor: true,
+      secondaryColor: true,
+      logoUrl: true,
+      wallpaperUrl: true,
+      attractVideoUrl: true,
+      maintenanceMode: true,
+      emailDeliveryEnabled: true,
+      galleryEnabled: true,
+      livePhotoEnabled: true,
+      paymentTimeoutSeconds: true,
+      autoResetSeconds: true,
+      whatsappNumber: true,
+      instagramHandle: true,
+      studioAddress: true,
+      promoHeadline: true,
+      promoSubheadline: true,
+      eventPackages: true,
+      pageBuilderLanding: true,
+      pageBuilderGallery: true,
+      customCss: true,
+    } as const;
+
+    let settings = await this.prisma.settings.findFirst({
+      select: publicSelect,
+    });
 
     if (!settings) {
       // Inisialisasi default jika belum ada
@@ -226,6 +255,7 @@ export class SettingsService {
           primaryColor: '#6C5CE7',
           secondaryColor: '#A29BFE',
         },
+        select: publicSelect,
       });
     }
 
@@ -279,11 +309,44 @@ export class SettingsService {
       return cachedAllSettings;
     }
 
-    let settings = await this.prisma.settings.findFirst();
+    const adminSelect = {
+      id: true,
+      boothName: true,
+      brandTitle: true,
+      welcomeText: true,
+      primaryColor: true,
+      secondaryColor: true,
+      logoUrl: true,
+      wallpaperUrl: true,
+      attractVideoUrl: true,
+      whatsappNumber: true,
+      instagramHandle: true,
+      studioAddress: true,
+      promoHeadline: true,
+      promoSubheadline: true,
+      eventPackages: true,
+      pageBuilderLanding: true,
+      pageBuilderGallery: true,
+      customCss: true,
+      retentionHours: true,
+      maxSessionTimeoutSeconds: true,
+      paymentTimeoutSeconds: true,
+      autoResetSeconds: true,
+      maintenanceMode: true,
+      emailDeliveryEnabled: true,
+      galleryEnabled: true,
+      livePhotoEnabled: true,
+      updatedAt: true,
+    } as const;
+
+    let settings = await this.prisma.settings.findFirst({
+      select: adminSelect,
+    });
 
     if (!settings) {
       settings = await this.prisma.settings.create({
         data: {},
+        select: adminSelect,
       });
     }
 
@@ -315,11 +378,21 @@ export class SettingsService {
   ) {
     SettingsService.clearCache();
 
-    let settings = await this.prisma.settings.findFirst();
+    const updatePreSelect = {
+      id: true,
+      logoUrl: true,
+      wallpaperUrl: true,
+      customCss: true,
+    } as const;
+
+    let settings = await this.prisma.settings.findFirst({
+      select: updatePreSelect,
+    });
 
     if (!settings) {
       settings = await this.prisma.settings.create({
         data: {},
+        select: updatePreSelect,
       });
     }
 

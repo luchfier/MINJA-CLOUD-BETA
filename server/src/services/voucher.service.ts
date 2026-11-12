@@ -4,6 +4,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { AppError, ErrorCode } from '../types/common.types.js';
+import { humanLogger } from '../utils/humanLogger.js';
 import type {
   ValidateVoucherInput,
   CreateVoucherInput,
@@ -152,6 +153,45 @@ export class VoucherService {
         discountAmount,
       },
     };
+  }
+
+  /**
+   * Mencatat penggunaan voucher dan memotong kuota secara atomic di PostgreSQL Supabase
+   */
+  async recordVoucherUsage(code: string, sessionId?: string): Promise<{ success: boolean; usedCount: number; remainingQuota: number }> {
+    const cleanCode = code.trim().toUpperCase();
+    return this.prisma.$transaction(async (tx) => {
+      const voucher = await tx.voucher.findUnique({
+        where: { code: cleanCode },
+      });
+
+      if (!voucher) {
+        throw new AppError(404, ErrorCode.NOT_FOUND, `Voucher '${cleanCode}' tidak ditemukan.`);
+      }
+
+      if (!voucher.isActive) {
+        throw new AppError(400, ErrorCode.VALIDATION_ERROR, `Voucher '${cleanCode}' sedang dinonaktifkan.`);
+      }
+
+      if (voucher.usedCount >= voucher.usageLimit) {
+        throw new AppError(400, ErrorCode.VALIDATION_ERROR, `Kuota pemakaian voucher '${cleanCode}' telah habis.`);
+      }
+
+      const updated = await tx.voucher.update({
+        where: { id: voucher.id },
+        data: {
+          usedCount: { increment: 1 },
+        },
+      });
+
+      humanLogger.success('VOUCHER', `Voucher [${cleanCode}] terpakai untuk sesi ${sessionId || '-'} (${updated.usedCount}/${updated.usageLimit})`);
+
+      return {
+        success: true,
+        usedCount: updated.usedCount,
+        remainingQuota: Math.max(0, updated.usageLimit - updated.usedCount),
+      };
+    });
   }
 
   /**

@@ -3,9 +3,6 @@ export interface PublicBrandingConfig {
   tagline: string;
   logoUrl: string;
   wallpaperUrl: string;
-  welcomeHeadline: string;
-  welcomeSubheadline: string;
-  startSessionButtonText: string;
   primaryColor: string;
   accentColor: string;
   darkSurfaceColor: string;
@@ -24,15 +21,7 @@ export interface PublicBrandingConfig {
   promoHeadline?: string;
   promoSubheadline?: string;
   eventPackages?: any[];
-  livePhotoEnabled?: boolean;
   pageBuilderLanding?: import('./pageBuilder').PageBuilderLandingConfig;
   pageBuilderGallery?: import('./pageBuilder').PageBuilderGalleryConfig;
   customCss?: string;
-}
-
-export interface AdminThemeConfig extends PublicBrandingConfig {
-  sessionTimeoutSeconds: number;
-  paymentTimeoutSeconds: number;
-  photoRetentionHours: number;
-  extraPrintPrice?: number;
 }

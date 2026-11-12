@@ -27,6 +27,7 @@ import {
   Wallet,
   Percent,
   Users,
+  User,
   RotateCcw,
   Key,
   DollarSign,
@@ -41,8 +42,7 @@ import {
   Power,
   FileText,
 } from 'lucide-react';
-import { photoboothApi } from '../../services/photoboothApi';
-import { isJwtExpired } from '../../services/httpPhotoboothApi';
+import { cloudApi, isJwtExpired } from '../../services/cloudApi';
 import { FleetTab } from './tabs/FleetTab';
 import { SessionsTab } from './tabs/SessionsTab';
 import { TransactionsTab } from './tabs/TransactionsTab';
@@ -75,10 +75,11 @@ export const OwnerPortal: React.FC = () => {
     localStorage.removeItem('minja_owner_token');
     return null;
   });
-  const [pinInput, setPinInput] = useState('');
-  const [pinError, setPinError] = useState('');
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [showKey, setShowKey] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // ==========================================
   // DEVICE DETECTION & RESPONSIVE ENGINE
@@ -158,8 +159,8 @@ export const OwnerPortal: React.FC = () => {
     const handleUnauthorized = () => {
       localStorage.removeItem('minja_owner_token');
       setToken(null);
-      setPinInput('');
-      setPinError('Sesi login telah kedaluwarsa. Silakan masukkan PIN kembali.');
+      setPasswordInput('');
+      setLoginError('Sesi login telah kedaluwarsa. Silakan masukkan kredensial kembali.');
     };
 
     window.addEventListener('minja:unauthorized', handleUnauthorized);
@@ -219,7 +220,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     setIsAnalyticsLoading(true);
     try {
-      const res = await photoboothApi.getNetworkFinancialAnalytics(
+      const res = await cloudApi.getNetworkFinancialAnalytics(
         {
           period: networkPeriod,
           startDate: networkPeriod === 'custom' ? customStartDate : undefined,
@@ -249,12 +250,6 @@ export const OwnerPortal: React.FC = () => {
   // Hapus Booth Modal State (Putus Akses API)
   const [kioskToDelete, setKioskToDelete] = useState<KioskItem | null>(null);
   const [isDeletingKiosk, setIsDeletingKiosk] = useState(false);
-
-  // Akses Password Mitra (Show / Hide Password via Tombol Mata)
-  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
-  const toggleRevealPassword = (partnerId: string) => {
-    setRevealedPasswords((prev) => ({ ...prev, [partnerId]: !prev[partnerId] }));
-  };
 
   // Ubah Password Mitra Modal State
   const [editPartnerPasswordTarget, setEditPartnerPasswordTarget] = useState<PartnerItem | null>(null);
@@ -291,7 +286,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     setIsDrilldownLoading(true);
     try {
-      const res = await photoboothApi.getPartnerDrilldown(partnerId, token);
+      const res = await cloudApi.getPartnerDrilldown(partnerId, token);
       if (res.success && res.data) {
         setSelectedDrilldownPartner(res.data);
       } else {
@@ -313,7 +308,7 @@ export const OwnerPortal: React.FC = () => {
     }
     setIsResettingPin(true);
     try {
-      const res = await photoboothApi.resetOperatorPin(resetPinTarget.id, newCashierPin, token);
+      const res = await cloudApi.resetOperatorPin(resetPinTarget.id, newCashierPin, token);
       if (res.success) {
         showFeedback('success', `PIN Kasir [${resetPinTarget.name}] berhasil diperbarui!`);
         setResetPinTarget(null);
@@ -335,7 +330,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token || !packageConfigKiosk) return;
     setIsSavingPackages(true);
     try {
-      const res = await photoboothApi.updateKioskPackages(packageConfigKiosk.id, disabledPackagesState, token);
+      const res = await cloudApi.updateKioskPackages(packageConfigKiosk.id, disabledPackagesState, token);
       if (res.success) {
         showFeedback('success', `Konfigurasi paket untuk ${packageConfigKiosk.name} berhasil disimpan!`);
         setPackageConfigKiosk(null);
@@ -356,7 +351,7 @@ export const OwnerPortal: React.FC = () => {
   const handleTogglePartnerVoucher = async (voucherId: string, currentActive: boolean) => {
     if (!token) return;
     try {
-      const res = await photoboothApi.toggleOwnerVoucher(voucherId, !currentActive, token);
+      const res = await cloudApi.toggleOwnerVoucher(voucherId, !currentActive, token);
       if (res.success) {
         showFeedback('success', `Status voucher berhasil ${!currentActive ? 'diaktifkan' : 'dinonaktifkan'}`);
         if (selectedDrilldownPartner) {
@@ -372,7 +367,7 @@ export const OwnerPortal: React.FC = () => {
   const handleDeletePartnerVoucher = async (voucherId: string) => {
     if (!token || !window.confirm('Yakin ingin menghapus voucher ini?')) return;
     try {
-      const res = await photoboothApi.deleteOwnerVoucher(voucherId, token);
+      const res = await cloudApi.deleteOwnerVoucher(voucherId, token);
       if (res.success) {
         showFeedback('success', 'Voucher berhasil dihapus');
         if (selectedDrilldownPartner) {
@@ -389,7 +384,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token || !kioskToDelete) return;
     setIsDeletingKiosk(true);
     try {
-      const res = await photoboothApi.deleteOwnerKiosk(token, kioskToDelete.id);
+      const res = await cloudApi.deleteOwnerKiosk(token, kioskToDelete.id);
       if (res.success) {
         showFeedback('success', `Booth [${kioskToDelete.code}] berhasil dihapus & akses API dicabut!`);
         setKioskToDelete(null);
@@ -417,7 +412,7 @@ export const OwnerPortal: React.FC = () => {
     }
     setIsUpdatingPartnerPassword(true);
     try {
-      const res = await photoboothApi.updateAdminPartner(token, editPartnerPasswordTarget.id, {
+      const res = await cloudApi.updateAdminPartner(token, editPartnerPasswordTarget.id, {
         password: newPartnerPasswordInput,
       });
       if (res.success) {
@@ -464,7 +459,7 @@ export const OwnerPortal: React.FC = () => {
     }
     setIsSavingPartnerSettings(true);
     try {
-      const res = await photoboothApi.updateAdminPartner(token, settingPartnerTarget.id, {
+      const res = await cloudApi.updateAdminPartner(token, settingPartnerTarget.id, {
         name: editPartnerName.trim(),
         email: editPartnerEmail.trim(),
         phone: editPartnerPhone.trim() || undefined,
@@ -495,7 +490,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     const newStatus = partner.isActive === false;
     try {
-      const res = await photoboothApi.updateAdminPartner(token, partner.id, {
+      const res = await cloudApi.updateAdminPartner(token, partner.id, {
         isActive: newStatus,
       });
       if (res.success) {
@@ -520,7 +515,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token || !partnerToDelete) return;
     setIsDeletingPartner(true);
     try {
-      const res = await photoboothApi.deleteAdminPartner(token, partnerToDelete.id);
+      const res = await cloudApi.deleteAdminPartner(token, partnerToDelete.id);
       if (res.success) {
         showFeedback(
           'success',
@@ -558,7 +553,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     setIsSessionsLoading(true);
     try {
-      const res = await photoboothApi.getNetworkSessions(
+      const res = await cloudApi.getNetworkSessions(
         {
           partnerId: globalPartnerFilter !== 'ALL' ? globalPartnerFilter : undefined,
           kioskId: globalKioskFilter !== 'ALL' ? globalKioskFilter : undefined,
@@ -609,7 +604,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     try {
       const [txRes, sumRes] = await Promise.all([
-        photoboothApi.getOwnerTransactions(
+        cloudApi.getOwnerTransactions(
           {
             category: txCategoryFilter,
             status: txStatusFilter,
@@ -626,7 +621,7 @@ export const OwnerPortal: React.FC = () => {
           },
           token
         ),
-        photoboothApi.getOwnerTransactionSummary(
+        cloudApi.getOwnerTransactionSummary(
           {
             dateMode: txDateMode,
             selectedDate: txSelectedDate,
@@ -670,7 +665,7 @@ export const OwnerPortal: React.FC = () => {
   const handleExportTransactionsCsv = async () => {
     setIsExportingCsv(true);
     try {
-      const csvContent = await photoboothApi.exportOwnerTransactionsCsv(
+      const csvContent = await cloudApi.exportOwnerTransactionsCsv(
         {
           category: txCategoryFilter,
           status: txStatusFilter,
@@ -702,45 +697,67 @@ export const OwnerPortal: React.FC = () => {
   };
 
   // ==========================================
-  // 5. MASTER DATA FETCHING
+  // 5. MASTER DATA FETCHING (ACTIVE-TAB AWARE)
   // ==========================================
   const fetchAllData = useCallback(async () => {
     if (!token) return;
 
     try {
+      const needMasterInit = kiosks.length === 0 && partners.length === 0;
+      const shouldFetchKiosks =
+        needMasterInit || activeTab === 'overview' || activeTab === 'fleet' || activeTab === 'partners';
+      const shouldFetchPartners =
+        needMasterInit || activeTab === 'overview' || activeTab === 'partners';
+      const shouldFetchPackages =
+        needMasterInit || activeTab === 'fleet';
+
       const [packagesRes, kiosksRes, partnersRes] = await Promise.all([
-        photoboothApi.getPackages(),
-        photoboothApi.getOwnerKiosks(token),
-        photoboothApi.getAdminPartners(token),
+        shouldFetchPackages ? cloudApi.getPackages() : Promise.resolve(null),
+        shouldFetchKiosks ? cloudApi.getOwnerKiosks(token) : Promise.resolve(null),
+        shouldFetchPartners ? cloudApi.getAdminPartners(token) : Promise.resolve(null),
       ]);
 
       if ((kiosksRes && !kiosksRes.success && kiosksRes.error?.code === 'UNAUTHORIZED') ||
           (partnersRes && !partnersRes.success && partnersRes.error?.code === 'UNAUTHORIZED')) {
         localStorage.removeItem('minja_owner_token');
         setToken(null);
-        setPinInput('');
-        setPinError('Sesi login telah kedaluwarsa. Silakan masukkan PIN kembali.');
+        setPasswordInput('');
+        setLoginError('Sesi login telah kedaluwarsa. Silakan masukkan kredensial kembali.');
         return;
       }
 
-      if (packagesRes.success && packagesRes.data) setPackages(packagesRes.data);
+      if (packagesRes && packagesRes.success && packagesRes.data) setPackages(packagesRes.data);
       if (kiosksRes && kiosksRes.success && kiosksRes.data) setKiosks(kiosksRes.data);
       if (partnersRes && partnersRes.success && partnersRes.data) setPartners(partnersRes.data);
 
-      await Promise.all([fetchNetworkAnalytics(), fetchTransactions(), fetchNetworkSessions()]);
+      if (activeTab === 'overview') {
+        await fetchNetworkAnalytics();
+      } else if (activeTab === 'transactions') {
+        await fetchTransactions();
+      } else if (activeTab === 'sessions') {
+        await fetchNetworkSessions();
+      }
     } catch (e) {
       console.warn('Gagal memuat master data owner:', e);
     }
-  }, [token, fetchNetworkAnalytics, fetchTransactions, fetchNetworkSessions]);
+  }, [
+    token,
+    activeTab,
+    kiosks.length,
+    partners.length,
+    fetchNetworkAnalytics,
+    fetchTransactions,
+    fetchNetworkSessions,
+  ]);
 
-  // Polling Real-Time efisien: 25 detik (dan berhenti saat tab tidak aktif untuk menghemat bandwidth/egress)
+  // Polling Real-Time efisien: 30 detik hanya untuk tab aktif (dan berhenti saat tab browser tersembunyi)
   useEffect(() => {
     if (token) {
       fetchAllData();
       const interval = setInterval(() => {
         if (typeof document !== 'undefined' && document.hidden) return;
         fetchAllData();
-      }, 25000);
+      }, 30000);
 
       const handleVisibilityChange = () => {
         if (typeof document !== 'undefined' && !document.hidden) {
@@ -756,15 +773,6 @@ export const OwnerPortal: React.FC = () => {
     }
     return undefined;
   }, [token, fetchAllData]);
-
-  // Trigger saat filter global berubah
-  useEffect(() => {
-    if (token) {
-      fetchNetworkAnalytics();
-      fetchTransactions();
-      fetchNetworkSessions();
-    }
-  }, [globalPartnerFilter, globalKioskFilter, fetchNetworkAnalytics, fetchTransactions, fetchNetworkSessions]);
 
   // ==========================================
   // OPERATIONAL ACTION MODALS
@@ -783,7 +791,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     setIsCreatingPartner(true);
     try {
-      const res = await photoboothApi.createAdminPartner(token, {
+      const res = await cloudApi.createAdminPartner(token, {
         name: partnerNameInput,
         email: partnerEmailInput,
         password: partnerPassInput,
@@ -823,7 +831,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token) return;
     setIsCreatingKiosk(true);
     try {
-      const res = await photoboothApi.createOwnerKiosk(token, {
+      const res = await cloudApi.createOwnerKiosk(token, {
         name: kioskNameInput,
         location: kioskLocationInput,
         code: kioskCodeInput.trim() || undefined,
@@ -831,7 +839,7 @@ export const OwnerPortal: React.FC = () => {
       });
       if (res.success && res.data) {
         if (kioskPartnerIdInput) {
-          await photoboothApi.assignKioskToPartner(token, res.data.id, kioskPartnerIdInput);
+          await cloudApi.assignKioskToPartner(token, res.data.id, kioskPartnerIdInput);
         }
         setCreatedKioskResult(res.data);
         showFeedback('success', `Booth [${res.data.name}] berhasil didaftarkan!`);
@@ -862,7 +870,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token || !targetLockKiosk) return;
     setIsSubmittingLock(true);
     try {
-      const res = await photoboothApi.toggleOwnerKioskLock(token, targetLockKiosk.id, true, lockReasonInput);
+      const res = await cloudApi.toggleOwnerKioskLock(token, targetLockKiosk.id, true, lockReasonInput);
       if (res.success) {
         showFeedback('success', `Booth [${targetLockKiosk.code}] berhasil dikunci.`);
         setIsLockKioskModalOpen(false);
@@ -879,7 +887,7 @@ export const OwnerPortal: React.FC = () => {
   const handleUnlockKiosk = async (kioskId: string, kioskCode: string) => {
     if (!token) return;
     try {
-      const res = await photoboothApi.toggleOwnerKioskLock(token, kioskId, false);
+      const res = await cloudApi.toggleOwnerKioskLock(token, kioskId, false);
       if (res.success) {
         showFeedback('success', `Booth [${kioskCode}] berhasil dibuka kembali.`);
         fetchAllData();
@@ -893,7 +901,7 @@ export const OwnerPortal: React.FC = () => {
   const handleRemoteResetKiosk = async (kioskId: string, kioskCode: string) => {
     if (!token || !window.confirm(`Reset sesi aktif di booth [${kioskCode}] sekarang?`)) return;
     try {
-      const res = await photoboothApi.remoteResetKioskSession(kioskId, token);
+      const res = await cloudApi.remoteResetKioskSession(kioskId, token);
       if (res.success) {
         showFeedback('success', `Booth [${kioskCode}] berhasil direset.`);
         fetchAllData();
@@ -907,7 +915,7 @@ export const OwnerPortal: React.FC = () => {
   const handleRotateApiKey = async (kioskId: string, kioskCode: string) => {
     if (!token || !window.confirm(`Rotasi API Key untuk booth [${kioskCode}]? Komputer booth harus diupdate dengan key baru.`)) return;
     try {
-      const res = await photoboothApi.rotateOwnerKioskApiKey(token, kioskId);
+      const res = await cloudApi.rotateOwnerKioskApiKey(token, kioskId);
       if (res.success && res.data) {
         navigator.clipboard.writeText(res.data.apiKey);
         showFeedback('success', `API Key [${kioskCode}] berhasil dirotasi & disalin ke clipboard!`);
@@ -921,7 +929,7 @@ export const OwnerPortal: React.FC = () => {
   const handleResetHardware = async (kioskId: string, kioskCode: string) => {
     if (!token || !window.confirm(`Lepas ikatan perangkat fisik (Hardware ID) untuk booth [${kioskCode}]?\n\nKunci API booth ini nantinya bisa diaktivasi pada komputer booth baru.`)) return;
     try {
-      const res = await photoboothApi.resetOwnerKioskHardware(token, kioskId);
+      const res = await cloudApi.resetOwnerKioskHardware(token, kioskId);
       if (res.success) {
         showFeedback('success', `Ikatan perangkat fisik booth [${kioskCode}] berhasil dilepas!`);
         fetchAllData();
@@ -933,7 +941,7 @@ export const OwnerPortal: React.FC = () => {
     }
   };
 
-  // Modal Ubah PIN Admin
+  // Modal Ubah Password Super Admin
   const [isChangePinOpen, setIsChangePinOpen] = useState(false);
   const [oldPin, setOldPin] = useState('');
   const [newPin, setNewPin] = useState('');
@@ -944,26 +952,26 @@ export const OwnerPortal: React.FC = () => {
   const handleChangePin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
-    if (newPin.length < 4 || newPin.length > 8) {
-      setChangePinError('PIN baru harus 4 - 8 digit.');
+    if (newPin.length < 6) {
+      setChangePinError('Password baru minimal harus 6 karakter.');
       return;
     }
     if (newPin !== confirmPin) {
-      setChangePinError('Konfirmasi PIN baru tidak cocok.');
+      setChangePinError('Konfirmasi password baru tidak cocok.');
       return;
     }
     setIsChangingPin(true);
     setChangePinError('');
     try {
-      const res = await photoboothApi.changePin(token, oldPin, newPin);
+      const res = await cloudApi.changePassword(token, oldPin, newPin);
       if (res.success) {
-        showFeedback('success', 'PIN Keamanan berhasil diubah!');
+        showFeedback('success', 'Password Super Admin berhasil diubah!');
         setIsChangePinOpen(false);
         setOldPin('');
         setNewPin('');
         setConfirmPin('');
       } else {
-        setChangePinError(res.error?.message || 'Gagal mengubah PIN');
+        setChangePinError(res.error?.message || 'Gagal mengubah password');
       }
     } catch {
       setChangePinError('Gagal menghubungi server');
@@ -982,7 +990,7 @@ export const OwnerPortal: React.FC = () => {
     if (!token || !resendModalSession) return;
     setIsResendingEmail(true);
     try {
-      const res = await photoboothApi.ownerResendEmail(resendModalSession.id, targetEmail, token);
+      const res = await cloudApi.ownerResendEmail(resendModalSession.id, targetEmail, token);
       if (res.success) {
         showFeedback('success', `Soft file berhasil dikirim ke ${targetEmail}`);
         setResendModalSession(null);
@@ -997,27 +1005,32 @@ export const OwnerPortal: React.FC = () => {
     }
   };
 
-  // Login Master Security Key Handler
+  // Login Super Admin Handler (Username & Password)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pinInput || pinInput.trim().length < 4) {
-      setPinError('Masukkan Master Security Key (minimal 4 karakter).');
+    if (!usernameInput.trim()) {
+      setLoginError('Masukkan Username atau Email Super Admin.');
+      return;
+    }
+    if (!passwordInput || passwordInput.trim().length < 4) {
+      setLoginError('Masukkan Password Super Admin (minimal 4 karakter).');
       return;
     }
     setIsLoggingIn(true);
-    setPinError('');
+    setLoginError('');
     try {
-      const res = await photoboothApi.loginAdmin(pinInput.trim());
+      const res = await cloudApi.loginAdmin(usernameInput.trim(), passwordInput.trim());
       if (res.success && res.data) {
         localStorage.setItem('minja_owner_token', res.data.token);
         setToken(res.data.token);
-        setPinInput('');
+        setUsernameInput('');
+        setPasswordInput('');
       } else {
-        const errMsg = !res.success ? res.error?.message : 'Kredensial Master Key tidak valid.';
-        setPinError(errMsg || 'Kredensial Master Key tidak valid.');
+        const errMsg = !res.success ? res.error?.message : 'Username atau password tidak valid.';
+        setLoginError(errMsg || 'Username atau password tidak valid.');
       }
     } catch {
-      setPinError('Gagal menghubungi node server booth.');
+      setLoginError('Gagal menghubungi node server booth.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -1092,7 +1105,7 @@ export const OwnerPortal: React.FC = () => {
             </div>
             <div className="flex items-center justify-between text-slate-400 text-[11px]">
               <span>Protokol Keamanan:</span>
-              <span className="font-mono text-indigo-300 text-[10px]">Argon2id • Zero-Trust Tunnel</span>
+              <span className="text-indigo-300 text-[10px]">Terenkripsi • Akses Aman</span>
             </div>
           </div>
 
@@ -1100,42 +1113,61 @@ export const OwnerPortal: React.FC = () => {
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider font-bold text-slate-400 flex items-center justify-between">
-                <span>Master Security Key</span>
+                <span>Username atau Email</span>
               </label>
 
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                  <KeyRound className="w-4 h-4 text-indigo-400" />
+                  <User className="w-4 h-4 text-indigo-400" />
                 </div>
                 <input
-                  type={showKey ? 'text' : 'password'}
+                  type="text"
                   autoFocus
-                  value={pinInput}
-                  onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="Masukkan Security Key Admin..."
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
+                  placeholder="Masukkan username admin..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono tracking-wide transition shadow-inner"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider font-bold text-slate-400 flex items-center justify-between">
+                <span>Password Super Admin</span>
+              </label>
+
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                  <Lock className="w-4 h-4 text-indigo-400" />
+                </div>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Masukkan password admin..."
                   className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-10 pr-11 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono tracking-wider transition shadow-inner"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowKey(!showKey)}
+                  onClick={() => setShowPassword(!showPassword)}
                   className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500 hover:text-slate-300 transition cursor-pointer"
-                  title={showKey ? 'Sembunyikan' : 'Tampilkan'}
+                  title={showPassword ? 'Sembunyikan' : 'Tampilkan'}
                 >
-                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
 
-              {pinError && (
+              {loginError && (
                 <div className="flex items-center gap-1.5 text-rose-400 text-xs font-semibold pt-1">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  <span>{pinError}</span>
+                  <span>{loginError}</span>
                 </div>
               )}
             </div>
 
             <button
               type="submit"
-              disabled={isLoggingIn || pinInput.length < 4}
+              disabled={isLoggingIn || !usernameInput.trim() || passwordInput.length < 4}
               className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-indigo-600 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-40 text-white font-black text-sm shadow-xl shadow-indigo-600/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer border border-indigo-400/20"
             >
               {isLoggingIn ? (
@@ -1146,7 +1178,7 @@ export const OwnerPortal: React.FC = () => {
               ) : (
                 <>
                   <Lock className="w-4 h-4" />
-                  <span>Buka Master Command Suite</span>
+                  <span>Masuk ke Super Admin Console</span>
                 </>
               )}
             </button>
@@ -1808,7 +1840,7 @@ export const OwnerPortal: React.FC = () => {
                   Master Security
                 </span>
                 <span className="text-[10px] text-slate-400 block mt-0.5 leading-tight">
-                  PIN otorisasi & Argon2id
+                  Ganti password Super Admin
                 </span>
               </div>
             </button>
@@ -2137,10 +2169,10 @@ export const OwnerPortal: React.FC = () => {
                 <div className="flex flex-wrap items-center gap-2 mt-0.5 text-xs">
                   <span className="text-slate-300 font-mono">Email: <strong>{p.email}</strong></span>
                   <span className="text-slate-600 hidden sm:inline">•</span>
-                  <span className="text-slate-300 font-mono flex items-center gap-1.5">
+                  <span className="text-slate-400 font-mono flex items-center gap-1.5">
                     Password:
-                    <strong className="text-white font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                      {revealedPasswords[p.id] ? (p.rawPassword || 'mitra123') : '••••••••••••'}
+                    <strong className="text-slate-300 font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                      ••••••••••••
                     </strong>
                   </span>
                 </div>
@@ -2150,22 +2182,15 @@ export const OwnerPortal: React.FC = () => {
             <div className="flex items-center gap-2 self-start sm:self-auto">
               <button
                 type="button"
-                onClick={() => toggleRevealPassword(p.id)}
-                className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition cursor-pointer border border-slate-700"
-              >
-                {revealedPasswords[p.id] ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Eye className="w-3.5 h-3.5 text-slate-400" />}
-                <span>{revealedPasswords[p.id] ? "Sembunyikan" : "Lihat Password"}</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => {
                   const fullPartner = partners.find((item) => item.id === p.id) || (p as any);
                   setEditPartnerPasswordTarget(fullPartner);
                   setNewPartnerPasswordInput('');
                 }}
-                className="py-1.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition cursor-pointer shadow-md shadow-indigo-600/30"
+                className="py-1.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition cursor-pointer shadow-md shadow-indigo-600/30 flex items-center gap-1.5"
               >
-                Ubah Password
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Reset Password</span>
               </button>
             </div>
           </div>
@@ -2540,26 +2565,18 @@ export const OwnerPortal: React.FC = () => {
                   </div>
                 </div>
 
-                {/* KREDENSIAL LOGIN MITRA (PASSWORD DENGAN TOMBOL MATA UNTUK ADMIN) */}
+                {/* KREDENSIAL LOGIN MITRA */}
                 <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1.5">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px] flex items-center gap-1.5">
                       <KeyRound className="w-3 h-3 text-amber-400" />
                       <span>Password Login Mitra</span>
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => toggleRevealPassword(p.id)}
-                      className="p-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1 text-[10px]"
-                      title={revealedPasswords[p.id] ? "Sembunyikan Password" : "Lihat Password"}
-                    >
-                      {revealedPasswords[p.id] ? <EyeOff className="w-3 h-3 text-amber-400" /> : <Eye className="w-3 h-3 text-slate-400" />}
-                      <span>{revealedPasswords[p.id] ? "Tutup" : "Lihat"}</span>
-                    </button>
+                    <span className="text-[10px] text-emerald-400 font-medium">Tersimpan Aman</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs font-bold text-white tracking-wide">
-                      {revealedPasswords[p.id] ? (p.rawPassword || 'mitra123') : '••••••••••••'}
+                    <span className="font-mono text-xs font-bold text-slate-300 tracking-wide">
+                      ••••••••••••
                     </span>
                     <button
                       type="button"
@@ -2569,7 +2586,7 @@ export const OwnerPortal: React.FC = () => {
                       }}
                       className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 transition cursor-pointer"
                     >
-                      Ubah Password
+                      Reset Password
                     </button>
                   </div>
                 </div>
@@ -3095,7 +3112,7 @@ export const OwnerPortal: React.FC = () => {
 
 
 
-        {/* MODAL UBAH PIN ADMIN */}
+        {/* MODAL UBAH PASSWORD ADMIN */}
         {isChangePinOpen && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
             <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
@@ -3104,48 +3121,47 @@ export const OwnerPortal: React.FC = () => {
                   <KeyRound className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-white">Ubah PIN Admin</h3>
-                  <p className="text-xs text-slate-400">Proteksi akses Super Admin</p>
+                  <h3 className="text-sm font-black text-white">Ubah Password Super Admin</h3>
+                  <p className="text-xs text-slate-400">Proteksi kredensial akun root / executive</p>
                 </div>
               </div>
 
               <form onSubmit={handleChangePin} className="space-y-3">
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">PIN Lama:</label>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">Password Lama:</label>
                   <input
                     type="password"
-                    inputMode="numeric"
-                    maxLength={8}
                     required
+                    placeholder="Masukkan password saat ini..."
                     value={oldPin}
                     onChange={(e) => setOldPin(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-xs font-mono tracking-widest text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">PIN Baru:</label>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">Password Baru:</label>
                   <input
                     type="password"
-                    inputMode="numeric"
-                    maxLength={8}
+                    minLength={6}
                     required
+                    placeholder="Minimal 6 karakter..."
                     value={newPin}
                     onChange={(e) => setNewPin(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-xs font-mono tracking-widest text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">Ulangi PIN Baru:</label>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">Ulangi Password Baru:</label>
                   <input
                     type="password"
-                    inputMode="numeric"
-                    maxLength={8}
+                    minLength={6}
                     required
+                    placeholder="Konfirmasi password baru..."
                     value={confirmPin}
                     onChange={(e) => setConfirmPin(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-xs font-mono tracking-widest text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                   />
                   {changePinError && <p className="text-rose-400 text-xs mt-1">{changePinError}</p>}
                 </div>
@@ -3163,7 +3179,7 @@ export const OwnerPortal: React.FC = () => {
                     disabled={isChangingPin || !oldPin || !newPin || !confirmPin}
                     className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-black shadow-lg shadow-indigo-600/30 cursor-pointer"
                   >
-                    {isChangingPin ? 'Menyimpan...' : 'Simpan PIN'}
+                    {isChangingPin ? 'Menyimpan...' : 'Simpan Password'}
                   </button>
                 </div>
               </form>

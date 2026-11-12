@@ -19,14 +19,17 @@ const ARGON2_CONFIG = {
 async function main(): Promise<void> {
   console.log('🌱 Seeding database Minja Cloud...\n');
 
-  // 1. Admin (Default PIN: 123456)
+  // 1. Admin (Default: username admin, password admin123)
   const existingAdmin = await prisma.admin.findFirst();
   if (!existingAdmin) {
-    const pinHash = await argon2.hash('123456', ARGON2_CONFIG);
+    const passwordHash = await argon2.hash('admin123', ARGON2_CONFIG);
     await prisma.admin.create({
-      data: { pinHash },
+      data: {
+        username: 'admin',
+        passwordHash,
+      },
     });
-    console.log('✅ Admin default dibuat (PIN: 123456)');
+    console.log('✅ Admin default dibuat (Username: admin, Password: admin123)');
   } else {
     console.log('⏭️  Admin sudah ada, dilewati');
   }

@@ -4,7 +4,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { AppError, ErrorCode } from '../types/common.types.js';
-import { hashPin, verifyPin, signCustomToken, encryptAtRest, decryptAtRest } from '../utils/auth.util.js';
+import { hashPin, verifyPin, signCustomToken, calculateGraduatedLockout } from '../utils/auth.util.js';
 import { humanLogger } from '../utils/humanLogger.js';
 import { formatSessionCode } from '../utils/session.util.js';
 import { AccessCodeService } from './accessCode.service.js';
@@ -166,7 +166,6 @@ export class PartnerService {
       id: p.id,
       name: p.name,
       email: p.email,
-      rawPassword: decryptAtRest((p as any).rawPassword) || null,
       phone: p.phone,
       revenueSharePct: p.revenueSharePct,
       receiptHeader: p.receiptHeader,
@@ -202,11 +201,10 @@ export class PartnerService {
         name: input.name.trim(),
         email: input.email.toLowerCase().trim(),
         passwordHash,
-        rawPassword: encryptAtRest(input.password.trim()),
         phone: input.phone?.trim(),
         revenueSharePct: input.revenueSharePct ?? 70,
         isActive: true,
-      } as any,
+      },
     });
 
     humanLogger.success('PARTNER', `Mitra baru berhasil didaftarkan: [${created.name}] (${created.email})`);
@@ -215,7 +213,6 @@ export class PartnerService {
       id: created.id,
       name: created.name,
       email: created.email,
-      rawPassword: input.password.trim(),
       revenueSharePct: created.revenueSharePct,
       isActive: created.isActive,
       createdAt: created.createdAt.toISOString(),
@@ -244,7 +241,6 @@ export class PartnerService {
     }
     if (input.password) {
       data.passwordHash = await hashPin(input.password);
-      data.rawPassword = encryptAtRest(input.password.trim());
     }
     if (input.revenueSharePct !== undefined) {
       data.revenueSharePct = input.revenueSharePct;
@@ -299,7 +295,6 @@ export class PartnerService {
       id: updated.id,
       name: updated.name,
       email: updated.email,
-      rawPassword: decryptAtRest((updated as any).rawPassword) || null,
       phone: updated.phone,
       revenueSharePct: updated.revenueSharePct,
       receiptHeader: updated.receiptHeader,
@@ -374,7 +369,7 @@ export class PartnerService {
   }
 
   /**
-   * Partner: Login mandiri mitra
+   * Partner: Login mandiri mitra dengan proteksi lockout bertahap
    */
   async partnerLogin(email: string, pass: string) {
     const partner = await this.prisma.partner.findUnique({
@@ -385,10 +380,60 @@ export class PartnerService {
       throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Email atau kata sandi mitra salah / akun dinonaktifkan.');
     }
 
+    const now = new Date();
+
+    // 1. Cek status lockout bertahap
+    if (partner.lockedUntil && partner.lockedUntil > now) {
+      const remainingMinutes = Math.ceil((partner.lockedUntil.getTime() - now.getTime()) / (60 * 1000));
+      throw new AppError(
+        423,
+        ErrorCode.ADMIN_LOCKED_OUT,
+        `Akun mitra terkunci sementara demi keamanan karena salah kata sandi. Coba lagi dalam ${remainingMinutes} menit.`,
+        { lockedUntil: partner.lockedUntil.toISOString(), remainingMinutes }
+      );
+    }
+
+    // 2. Verifikasi kata sandi
     const isValid = await verifyPin(pass, partner.passwordHash);
     if (!isValid) {
-      throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Email atau kata sandi mitra salah.');
+      const newAttempts = (partner.failedAttempts || 0) + 1;
+      const lockoutTier = calculateGraduatedLockout(newAttempts);
+      const lockedUntil = lockoutTier ? lockoutTier.lockedUntil : null;
+
+      await this.prisma.partner.update({
+        where: { id: partner.id },
+        data: {
+          failedAttempts: newAttempts,
+          lockedUntil,
+        },
+      });
+
+      if (lockoutTier && lockedUntil) {
+        throw new AppError(
+          423,
+          ErrorCode.ADMIN_LOCKED_OUT,
+          `Kata sandi salah ${newAttempts} kali berturut-turut. Akun dikunci sementara selama ${lockoutTier.minutes} menit demi keamanan.`,
+          { lockedUntil: lockedUntil.toISOString(), remainingMinutes: lockoutTier.minutes }
+        );
+      }
+
+      const remainingAttempts = Math.max(1, 3 - newAttempts);
+      throw new AppError(
+        401,
+        ErrorCode.UNAUTHORIZED,
+        `Email atau kata sandi salah. Percobaan tersisa sebelum akun dikunci: ${remainingAttempts} kali.`
+      );
     }
+
+    // Reset status lockout jika login berhasil
+    await this.prisma.partner.update({
+      where: { id: partner.id },
+      data: {
+        failedAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+      },
+    });
 
     const { token, expiresAt } = signCustomToken({
       sub: partner.id,
@@ -442,7 +487,6 @@ export class PartnerService {
       where: { id: partnerId },
       data: {
         passwordHash: newHash,
-        rawPassword: encryptAtRest(newPass.trim()),
       },
     });
 
@@ -464,21 +508,14 @@ export class PartnerService {
 
     const { rangeStart: startOfTodayWib } = calculateWibDateRange('today');
     const now = Date.now();
+    const kioskIds = kiosks.map((k) => k.id);
 
-    return Promise.all(
-      kiosks.map(async (k) => {
-        // Dynamic status check (>45s = OFFLINE)
-        let dynamicStatus = k.status;
-        if (k.lastHeartbeat) {
-          const diffMs = now - k.lastHeartbeat.getTime();
-          if (diffMs > 45000 && k.status !== 'MAINTENANCE') {
-            dynamicStatus = 'OFFLINE';
-          }
-        }
-
-        const todaySessions = await this.prisma.session.aggregate({
+    // BATCH QUERY AGGREGATION: 1 query tunggal menggantikan N loop aggregate
+    const todayAggregates = kioskIds.length > 0
+      ? await this.prisma.session.groupBy({
+          by: ['kioskId'],
           where: {
-            kioskId: k.id,
+            kioskId: { in: kioskIds },
             createdAt: { gte: startOfTodayWib },
             totalPrice: { gt: 0 },
             payments: {
@@ -494,28 +531,51 @@ export class PartnerService {
           },
           _sum: { totalPrice: true, photosPrinted: true },
           _count: { id: true },
-        });
+        })
+      : [];
 
-        return {
-          id: k.id,
-          code: k.code,
-          name: k.name,
-          location: k.location,
-          status: dynamicStatus,
-          paperRemaining: k.paperRemaining,
-          paperRollCapacity: k.paperRollCapacity,
-          paperTrackingEnabled: Array.isArray(k.disabledPackageIds) && k.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
-          printerStatus: k.printerStatus || 'UNKNOWN',
-          cameraStatus: k.cameraStatus || 'UNKNOWN',
-          isLocked: k.isLocked,
-          lockReason: k.lockReason,
-          lastHeartbeat: k.lastHeartbeat?.toISOString() || null,
-          todayRevenue: todaySessions._sum.totalPrice || 0,
-          todaySessionsCount: todaySessions._count.id || 0,
-          todayPrintsCount: todaySessions._sum.photosPrinted || 0,
-        };
-      })
-    );
+    const aggMap = new Map<string, { revenue: number; count: number; prints: number }>();
+    for (const agg of todayAggregates) {
+      if (agg.kioskId) {
+        aggMap.set(agg.kioskId, {
+          revenue: agg._sum.totalPrice || 0,
+          count: agg._count.id || 0,
+          prints: agg._sum.photosPrinted || 0,
+        });
+      }
+    }
+
+    return kiosks.map((k) => {
+      // Dynamic status check (>4m = OFFLINE — menyesuaikan throttle DB write 3 menit)
+      let dynamicStatus = k.status;
+      if (k.lastHeartbeat) {
+        const diffMs = now - k.lastHeartbeat.getTime();
+        if (diffMs > 240000 && k.status !== 'MAINTENANCE') {
+          dynamicStatus = 'OFFLINE';
+        }
+      }
+
+      const agg = aggMap.get(k.id) || { revenue: 0, count: 0, prints: 0 };
+
+      return {
+        id: k.id,
+        code: k.code,
+        name: k.name,
+        location: k.location,
+        status: dynamicStatus,
+        paperRemaining: k.paperRemaining,
+        paperRollCapacity: k.paperRollCapacity,
+        paperTrackingEnabled: Array.isArray(k.disabledPackageIds) && k.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
+        printerStatus: k.printerStatus || 'UNKNOWN',
+        cameraStatus: k.cameraStatus || 'UNKNOWN',
+        isLocked: k.isLocked,
+        lockReason: k.lockReason,
+        lastHeartbeat: k.lastHeartbeat?.toISOString() || null,
+        todayRevenue: agg.revenue,
+        todaySessionsCount: agg.count,
+        todayPrintsCount: agg.prints,
+      };
+    });
   }
 
   /**

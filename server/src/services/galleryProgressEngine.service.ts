@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { StorageService, SessionGalleryItem } from './storage.service.js';
 
 export type StepProgressStatus = 'done' | 'processing' | 'waiting';
@@ -29,7 +27,7 @@ export class GalleryProgressEngine {
   constructor(private storageService: StorageService = new StorageService()) {}
 
   /**
-   * Menghitung status progres nyata dari sesi berdasarkan file yang ada di storage
+   * Menghitung status progres nyata dari sesi berdasarkan file yang ada di Cloudflare R2 storage
    * Dilengkapi Smart Grace Period (Anti-Hang): Jika frame foto sudah mendarat di storage,
    * sistem memberi toleransi wajar untuk video tiba sebelum otomatis beralih ke 'ready',
    * sehingga pelanggan tidak akan pernah terkunci di layar loading.
@@ -48,32 +46,10 @@ export class GalleryProgressEngine {
     const hasFrames = frames.length > 0;
     const hasVideos = videos.length > 0;
 
-    // Hitung usia sesi sejak token galeri dibuat atau sejak file pertama mendarat
-    let sessionAgeMs = sessionCreatedAt
+    // Hitung usia sesi sejak token galeri dibuat
+    const sessionAgeMs = sessionCreatedAt
       ? Math.max(0, Date.now() - new Date(sessionCreatedAt).getTime())
       : 0;
-
-    // Fallback usia dari mtime file fisik jika sessionCreatedAt tidak dipasok
-    if (sessionAgeMs === 0) {
-      try {
-        const sessionDir = path.join(this.storageService.getBaseDir(), sessionId);
-        if (fs.existsSync(sessionDir)) {
-          const files = fs.readdirSync(sessionDir);
-          const mtimes = files
-            .map((f) => {
-              try {
-                return fs.statSync(path.join(sessionDir, f)).mtimeMs;
-              } catch {
-                return 0;
-              }
-            })
-            .filter((m) => m > 0);
-          if (mtimes.length > 0) {
-            sessionAgeMs = Math.max(0, Date.now() - Math.min(...mtimes));
-          }
-        }
-      } catch {}
-    }
 
     // Grace period video & rendering: 45 detik (memberi waktu aman bagi booth untuk transcode & upload)
     const isVideoGracePeriodPassed = sessionAgeMs >= 45000;
@@ -170,7 +146,6 @@ export class GalleryProgressEngine {
     }
 
     // Skenario 4: Siap Diunduh!
-    // Baik karena video sudah lengkap, ATAU karena frame cetak sudah ada dan grace period video telah lewat.
     return {
       sessionId,
       status: 'ready',

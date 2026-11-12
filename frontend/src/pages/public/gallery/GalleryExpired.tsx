@@ -14,7 +14,6 @@ export interface GalleryExpiredProps {
 
 export const GalleryExpired: React.FC<GalleryExpiredProps> = ({
   sessionCode,
-  studioAddress,
   createdAt,
   onBackToInput,
   builderConfig,
@@ -55,15 +54,8 @@ export const GalleryExpired: React.FC<GalleryExpiredProps> = ({
           {builderConfig?.subheadline || 'Foto sesi digital otomatis dihapus setelah 48 jam demi keamanan dan privasi Anda.'}
         </p>
 
-        {/* Informasi Subheader Terstandarisasi: Alamat > No Resi > Tanggal Sesi */}
+        {/* Informasi Subheader: No Resi & Tanggal Sesi */}
         <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center px-0.5 mt-0.5 mb-4">
-          <div className="flex items-center gap-1 min-w-0">
-            <span className="material-symbols-outlined text-[15px] text-[#47464b] shrink-0">location_on</span>
-            <span className="text-[11.5px] text-[#1a1b22] font-semibold font-['JetBrains_Mono'] truncate">
-              {studioAddress || 'Lokasi Booth Minja Studio'}
-            </span>
-          </div>
-          <span className="text-zinc-300 text-[10px] shrink-0">•</span>
           <span className="text-[11px] font-semibold text-zinc-600 bg-zinc-200/80 px-1.5 py-0.5 rounded font-['JetBrains_Mono'] shrink-0">
             #{sessionCode ? sessionCode.replace(/^#+/, '') : '0001'}
           </span>

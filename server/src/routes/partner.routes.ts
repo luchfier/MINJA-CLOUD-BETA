@@ -215,21 +215,6 @@ export async function partnerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * POST /api/partner/sync
-   * Memicu sinkronisasi manual antrean data pending/offline ke database
-   */
-  app.post('/api/partner/sync', { preHandler: [requirePartnerAuth] }, async (_request, reply) => {
-    await app.syncQueueService.checkConnectivity();
-    const result = await app.syncQueueService.drainQueue();
-    sendSuccess(reply, {
-      processed: result.processed,
-      succeeded: result.succeeded,
-      failed: result.failed,
-      message: `Sinkronisasi berhasil: ${result.succeeded} data pending berhasil disinkronkan ke database`,
-    });
-  });
-
-  /**
    * GET /api/partner/financial-analytics & /api/partner/analytics
    * Laporan omzet dan performa mendalam khusus booth milik partner
    */

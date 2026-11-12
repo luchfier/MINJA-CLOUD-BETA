@@ -32,16 +32,6 @@ export enum ErrorCode {
   PAYMENT_EXPIRED = "PAYMENT_EXPIRED",
   MIDTRANS_ERROR = "MIDTRANS_ERROR",
   INVALID_SIGNATURE = "INVALID_SIGNATURE",
-  PRICE_CALCULATION_MISMATCH = "PRICE_CALCULATION_MISMATCH",
-
-  // Hardware
-  CAMERA_NOT_FOUND = "CAMERA_NOT_FOUND",
-  CAMERA_BUSY = "CAMERA_BUSY",
-  CAMERA_CAPTURE_FAILED = "CAMERA_CAPTURE_FAILED",
-  PRINTER_OFFLINE = "PRINTER_OFFLINE",
-  PRINTER_OUT_OF_PAPER = "PRINTER_OUT_OF_PAPER",
-  PRINTER_OUT_OF_RIBBON = "PRINTER_OUT_OF_RIBBON",
-  PRINT_JOB_FAILED = "PRINT_JOB_FAILED",
 
   // Delivery
   EMAIL_FAILED = "EMAIL_FAILED",
@@ -71,129 +61,6 @@ export interface PaginatedResponse<T> {
   page: number;
   limit: number;
   totalPages: number;
-}
-
-export interface PendingSyncItem {
-  sessionId: string;
-  sessionCode: string;
-  localFolderPath: string;
-  filesCount: number;
-  recipientEmail?: string | null;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  retryCount: number;
-  maxRetries: number;
-  r2Uploaded: boolean;
-  databaseSynced: boolean;
-  emailSent: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastAttemptAt?: string;
-  errorMsg?: string;
-}
-
-export interface SyncEngineStatus {
-  isOnline: boolean;
-  isDatabaseConnected: boolean;
-  pendingCount: number;
-  processingCount: number;
-  completedCount: number;
-  failedCount: number;
-  totalQueued: number;
-  lastSyncAt: string | null;
-  items: PendingSyncItem[];
-}
-
-export interface SyncTriggerResult {
-  processed: number;
-  succeeded: number;
-  failed: number;
-  status: SyncEngineStatus;
-  message: string;
-}
-
-export interface SystemTimingConfig {
-  syncIntervalSeconds: number;
-  cleanupIntervalHours: number;
-  printRetentionHours: number;
-  galleryRetentionHours: number;
-}
-
-export interface TunnelConfig {
-  tunnelUrl: string;
-  provider: 'cloudflare' | 'custom';
-  updatedAt: string;
-  isActive: boolean;
-}
-
-export interface OwnerTelemetry {
-  kioskStatus: 'IDLE' | 'IN_SESSION' | 'PRINTING' | 'MAINTENANCE' | 'OFFLINE';
-  isMaintenance: boolean;
-  maintenanceReason?: string;
-  boothName: string;
-  activeSession: {
-    sessionId: string;
-    sessionCode: string;
-    packageName: string;
-    state: string;
-    totalPrice: number;
-    totalPrints: number;
-  } | null;
-  financialToday: {
-    totalRevenue: number;
-    qrisRevenue: number;
-    cashRevenue: number;
-    transactionsCount: number;
-    totalSessions: number;
-    completedSessions: number;
-    totalPrints: number;
-    estimatedPaperRemaining: number;
-    paperRollCapacity: number;
-  };
-  hardware: {
-    selectedPrinter: string;
-    isPrinterOnline: boolean;
-    detectedPrintersCount: number;
-  };
-  syncStatus: {
-    isOnline: boolean;
-    isDatabaseConnected: boolean;
-    pendingQueueCount: number;
-    failedQueueCount: number;
-    lastSyncAt: string | null;
-  };
-  tunnel: TunnelConfig;
-  serverTime: string;
-}
-
-export interface OwnerSessionToday {
-  id: string;
-  sessionCode: string;
-  packageName: string;
-  state: string;
-  totalPrice: number;
-  totalAmount?: number;
-  customerName?: string;
-  kioskId?: string;
-  totalPrints: number;
-  createdAt: string;
-  payment: {
-    orderId: string;
-    paymentType: string;
-    grossAmount: number;
-    status: string;
-    settlementTime: string | null;
-  } | null;
-  emailDelivery: {
-    status: string;
-    email: string;
-    sentAt: string | null;
-  } | null;
-  files: Array<{
-    fileName: string;
-    url: string;
-    sizeBytes: number;
-    category: 'Photo Frame' | 'Single Cut' | 'Live Video';
-  }>;
 }
 
 export interface AccessCodeItem {
@@ -365,45 +232,6 @@ export interface TransactionSummaryDto {
   voucherPromo?: { voucherUsageCount: number; discountSavings: number };
 }
 
-export interface IntegrationConfig {
-  kioskCode: string;
-  kioskName: string;
-  kioskLocation: string;
-  boothApiKey?: string;
-  isActivated?: boolean;
-  midtransServerKey: string;
-  midtransClientKey: string;
-  midtransIsProduction: boolean;
-  hasMidtransServerKey: boolean;
-  resendApiKey: string;
-  hasResendApiKey: boolean;
-  resendFrom: string;
-  galleryBaseUrl: string;
-  s3Endpoint?: string;
-  s3AccessKey?: string;
-  hasS3SecretKey?: boolean;
-  s3BucketName?: string;
-  s3Region?: string;
-}
-
-export interface UpdateIntegrationRequest {
-  kioskCode?: string;
-  kioskName?: string;
-  kioskLocation?: string;
-  boothApiKey?: string;
-  midtransServerKey?: string;
-  midtransClientKey?: string;
-  midtransIsProduction?: boolean;
-  resendApiKey?: string;
-  resendFrom?: string;
-  s3Endpoint?: string;
-  s3AccessKey?: string;
-  s3SecretKey?: string;
-  s3BucketName?: string;
-  s3Region?: string;
-  galleryBaseUrl?: string;
-}
-
 export type KioskStatus = 'ONLINE' | 'OFFLINE' | 'IN_SESSION' | 'PRINTING' | 'MAINTENANCE';
 
 export interface KioskItem {
@@ -433,25 +261,11 @@ export interface KioskItem {
   todaySessionsCount: number;
 }
 
-export interface KioskActivationStatus {
-  isActivated: boolean;
-  message?: string;
-  kiosk?: {
-    id?: string;
-    code: string;
-    name: string;
-    location: string;
-    status?: string;
-    partnerName?: string | null;
-  };
-}
-
 export interface PartnerItem {
   id: string;
   name: string;
   code?: string;
   email: string;
-  rawPassword?: string | null;
   phone?: string | null;
   revenueSharePct: number;
   receiptHeader?: string | null;
@@ -768,7 +582,6 @@ export interface PartnerDrilldownDetails {
     id: string;
     name: string;
     email: string;
-    rawPassword?: string | null;
     phone?: string | null;
     revenueSharePct: number;
     receiptHeader?: string | null;

@@ -354,8 +354,8 @@ export const DEFAULT_PAGE_BUILDER_LANDING: LandingPageDocument = {
   branding: {
     brandName: 'Minja Studio',
     logoUrl: '/storage/branding/logo.png',
-    whatsappNumber: '6281234567890',
-    instagramHandle: '@minjastudio',
+    whatsappNumber: '6281321699090',
+    instagramHandle: '@minjabooth',
   },
   seo: {
     metaTitle: 'Minja Studio — Photobooth Mandiri Kualitas Cetak Lab',
@@ -380,7 +380,7 @@ export const DEFAULT_PAGE_BUILDER_LANDING: LandingPageDocument = {
         },
         secondaryButton: {
           label: 'Konsultasi Sewa Acara',
-          url: 'https://wa.me/6281234567890',
+          url: 'https://wa.me/6281321699090',
         },
         cameraFrameBadge: 'STUDIO LIVE VIEW',
         cameraFrameSubtitle: 'Kamera Studio Presisi • Natural Skin Tone Lab',
@@ -553,7 +553,7 @@ export const DEFAULT_PAGE_BUILDER_LANDING: LandingPageDocument = {
         description: 'Layanan photobooth mandiri tanpa ribet dengan operator ramah, cetakan tanpa batas (unlimited prints), desain frame kustom nama pengantin/perusahaan, dan galeri cloud instan.',
         primaryButton: {
           label: 'Konsultasi Sewa via WhatsApp',
-          url: 'https://wa.me/6281234567890',
+          url: 'https://wa.me/6281321699090',
         },
         features: [
           'Pilihan Desain Frame & Strip Kustom',
@@ -572,12 +572,12 @@ export const DEFAULT_PAGE_BUILDER_LANDING: LandingPageDocument = {
         socialLinks: [
           {
             platform: 'instagram',
-            url: 'https://instagram.com/minjastudio',
-            label: '@minjastudio',
+            url: 'https://instagram.com/minjabooth',
+            label: '@minjabooth',
           },
           {
             platform: 'whatsapp',
-            url: 'https://wa.me/6281234567890',
+            url: 'https://wa.me/6281321699090',
             label: 'WhatsApp Studio',
           },
         ],
@@ -641,7 +641,7 @@ export const DEFAULT_PAGE_BUILDER_GALLERY: MobileGalleryThemeDocument = {
       emptyStateDescription: 'Silakan periksa kembali kode sesi atau PIN 4-digit Anda.',
       expiredTitle: 'Masa Penyimpanan Galeri Berakhir',
       expiredDescription: 'Sesuai kebijakan privasi studio, file foto dan video sesi ini telah dibersihkan secara aman setelah 48 jam.',
-      expiredSupportWhatsapp: '6281234567890',
+      expiredSupportWhatsapp: '6281321699090',
     },
     footer: {
       visible: true,

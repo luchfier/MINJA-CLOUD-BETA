@@ -4,6 +4,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { formatSessionCode } from '../utils/session.util.js';
+import { calculateWibDateRange } from './partner.service.js';
 
 export type TransactionCategory =
   | 'QRIS_MIDTRANS'
@@ -155,6 +156,7 @@ export class TransactionEngineService {
           orderId: { not: { startsWith: 'TEST-' } },
         },
         orderBy: { createdAt: 'desc' },
+        take: 2500,
         select: {
           id: true,
           orderId: true,
@@ -228,8 +230,7 @@ export class TransactionEngineService {
       }
     }
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const { rangeStart: todayStart } = calculateWibDateRange('today');
 
     // Proses klasifikasi setiap record
     const allCategorized: CategorizedTransactionItem[] = payments.map((p) => {
@@ -370,38 +371,49 @@ export class TransactionEngineService {
       filtered = filtered.filter((t) => t.status === filters.status);
     }
 
-    // Filter Tanggal Multi-Mode: 'today' | 'monthly' | 'custom' | 'all'
+    // Filter Tanggal Multi-Mode Presisi WIB (UTC+7): 'today' | 'monthly' | 'custom' | 'all'
     if (filters?.dateMode === 'today' || filters?.isTodayOnly) {
-      const targetDate = filters?.selectedDate ? new Date(filters.selectedDate) : new Date();
-      const start = new Date(targetDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(targetDate);
-      end.setHours(23, 59, 59, 999);
+      const { rangeStart: start, rangeEnd: end } = filters?.selectedDate
+        ? calculateWibDateRange('custom', filters.selectedDate, filters.selectedDate)
+        : calculateWibDateRange('today');
       filtered = filtered.filter((t) => {
         const d = new Date(t.createdAt);
         return d >= start && d <= end;
       });
     } else if (filters?.dateMode === 'monthly' || filters?.selectedMonth) {
-      const monthStr = filters?.selectedMonth || new Date().toISOString().slice(0, 7);
-      const parts = monthStr.split('-').map(Number);
-      const y = parts[0] ?? new Date().getFullYear();
-      const m = parts[1] ?? (new Date().getMonth() + 1);
-      const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
-      const end = new Date(y, m, 0, 23, 59, 59, 999);
-      filtered = filtered.filter((t) => {
-        const d = new Date(t.createdAt);
-        return d >= start && d <= end;
-      });
-    } else if (filters?.dateMode === 'custom' || filters?.startDate || filters?.endDate) {
-      if (filters?.startDate) {
-        const start = new Date(filters.startDate);
-        start.setHours(0, 0, 0, 0);
-        filtered = filtered.filter((t) => new Date(t.createdAt) >= start);
+      if (filters?.selectedMonth) {
+        const parts = filters.selectedMonth.split('-').map(Number);
+        const y = parts[0] ?? new Date().getFullYear();
+        const m = parts[1] ?? (new Date().getMonth() + 1);
+        const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0) - 7 * 3600 * 1000);
+        const end = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999) - 7 * 3600 * 1000);
+        filtered = filtered.filter((t) => {
+          const d = new Date(t.createdAt);
+          return d >= start && d <= end;
+        });
+      } else {
+        const { rangeStart: start, rangeEnd: end } = calculateWibDateRange('this_month');
+        filtered = filtered.filter((t) => {
+          const d = new Date(t.createdAt);
+          return d >= start && d <= end;
+        });
       }
-      if (filters?.endDate) {
-        const end = new Date(filters.endDate);
-        end.setHours(23, 59, 59, 999);
-        filtered = filtered.filter((t) => new Date(t.createdAt) <= end);
+    } else if (filters?.dateMode === 'custom' || filters?.startDate || filters?.endDate) {
+      if (filters?.startDate && filters?.endDate) {
+        const { rangeStart: start, rangeEnd: end } = calculateWibDateRange('custom', filters.startDate, filters.endDate);
+        filtered = filtered.filter((t) => {
+          const d = new Date(t.createdAt);
+          return d >= start && d <= end;
+        });
+      } else {
+        if (filters?.startDate) {
+          const { rangeStart: start } = calculateWibDateRange('custom', filters.startDate, filters.startDate);
+          filtered = filtered.filter((t) => new Date(t.createdAt) >= start);
+        }
+        if (filters?.endDate) {
+          const { rangeEnd: end } = calculateWibDateRange('custom', filters.endDate, filters.endDate);
+          filtered = filtered.filter((t) => new Date(t.createdAt) <= end);
+        }
       }
     }
 
@@ -450,10 +462,9 @@ export class TransactionEngineService {
     const todayGrossRevenue = todaySettled.reduce((acc, curr) => acc + curr.grossAmount, 0);
     const todayTransactionsCount = todaySettled.length;
 
-    // Bulan Ini (Current Month)
+    // Bulan Ini (Current Month WIB UTC+7)
     const now = new Date();
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const { rangeStart: currentMonthStart, rangeEnd: currentMonthEnd } = calculateWibDateRange('this_month');
     const monthlySettled = settledAll.filter((t) => {
       const d = new Date(t.createdAt);
       return d >= currentMonthStart && d <= currentMonthEnd;

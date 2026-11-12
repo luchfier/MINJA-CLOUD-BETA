@@ -7,10 +7,11 @@ import { LandingTranslations } from '../translations';
 interface RentEventViewProps {
   t: LandingTranslations;
   whatsappUrl: string;
+  getRentWhatsappUrl?: (pkgName: string) => string;
   onBackToHome: () => void;
 }
 
-export const RentEventView: React.FC<RentEventViewProps> = ({ t, whatsappUrl, onBackToHome }) => {
+export const RentEventView: React.FC<RentEventViewProps> = ({ t, whatsappUrl, getRentWhatsappUrl, onBackToHome }) => {
   return (
     <div className="w-full pt-24 md:pt-32 pb-20 max-w-6xl mx-auto px-6 md:px-8 animate-in fade-in duration-300">
       {/* Navigation Breadcrumb / Back Pill */}
@@ -128,7 +129,7 @@ export const RentEventView: React.FC<RentEventViewProps> = ({ t, whatsappUrl, on
             </div>
             <div className="pt-6">
               <a
-                href={whatsappUrl}
+                href={getRentWhatsappUrl ? getRentWhatsappUrl(t.rent_p1_name) : whatsappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl bg-[#F5F3EE] hover:bg-[#E5DFD5] text-[#141312] text-xs font-semibold transition-all shadow-xs"
@@ -181,7 +182,7 @@ export const RentEventView: React.FC<RentEventViewProps> = ({ t, whatsappUrl, on
             </div>
             <div className="pt-6">
               <a
-                href={whatsappUrl}
+                href={getRentWhatsappUrl ? getRentWhatsappUrl(t.rent_p2_name) : whatsappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl bg-[#141312] text-white hover:bg-zinc-800 text-xs font-semibold transition-all shadow-md active:scale-95"
@@ -226,7 +227,7 @@ export const RentEventView: React.FC<RentEventViewProps> = ({ t, whatsappUrl, on
             </div>
             <div className="pt-6">
               <a
-                href={whatsappUrl}
+                href={getRentWhatsappUrl ? getRentWhatsappUrl(t.rent_p3_name) : whatsappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl bg-[#F5F3EE] hover:bg-[#E5DFD5] text-[#141312] text-xs font-semibold transition-all shadow-xs"

@@ -1,14 +1,14 @@
 {
-  "name": "Minja Photobooth Command Portal",
-  "short_name": "Minja Portal",
-  "description": "Owner & Partner Network Management Command Portal — Minja Photobooth Enterprise",
+  "name": "Minja Photobooth",
+  "short_name": "Minja",
+  "description": "Minja Booth — Platform Self-Service Photobooth mandiri tanpa canggung dengan kualitas cetak studio lab foto tahan air.",
   "start_url": "/",
   "id": "/",
   "display": "standalone",
-  "background_color": "#0B0F19",
-  "theme_color": "#4F46E5",
+  "background_color": "#FAF9F6",
+  "theme_color": "#FAF9F6",
   "orientation": "any",
-  "categories": ["business", "productivity", "utilities"],
+  "categories": ["lifestyle", "photography", "entertainment"],
   "icons": [
     {
       "src": "/icons/minja-icon.png",
@@ -24,4 +24,3 @@
     }
   ]
 }
-

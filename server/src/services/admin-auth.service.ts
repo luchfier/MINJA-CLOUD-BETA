@@ -4,7 +4,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { AppError, ErrorCode } from '../types/common.types.js';
-import { hashPin, verifyPin, signAdminToken } from '../utils/auth.util.js';
+import { hashPin, verifyPin, signAdminToken, calculateGraduatedLockout } from '../utils/auth.util.js';
 import { logAuditEvent } from './audit.service.js';
 
 const BRUTE_FORCE_CONFIG = {
@@ -16,16 +16,52 @@ export class AdminAuthService {
   constructor(private prisma: PrismaClient) {}
 
   /**
-   * Login Admin dengan validasi PIN & proteksi lockout
+   * Login Admin dengan validasi Username/Email + Password & proteksi lockout
    */
-  async login(pin: string, ipAddress?: string, userAgent?: string) {
-    const admin = await this.prisma.admin.findFirst();
+  async login(
+    input: { username?: string; password?: string; pin?: string } | string,
+    passwordOrIp?: string,
+    maybeIp?: string,
+    maybeUserAgent?: string
+  ) {
+    let username = 'admin';
+    let password = '';
+    let ipAddress: string | undefined;
+    let userAgent: string | undefined;
+
+    if (typeof input === 'object') {
+      username = (input.username || 'admin').trim();
+      password = (input.password || input.pin || '').trim();
+      ipAddress = passwordOrIp;
+      userAgent = maybeIp;
+    } else if (passwordOrIp && (maybeIp !== undefined || passwordOrIp.length < 20)) {
+      username = input.trim();
+      password = passwordOrIp.trim();
+      ipAddress = maybeIp;
+      userAgent = maybeUserAgent;
+    } else {
+      // Legacy fallback: login(pin, ip, ua)
+      username = 'admin';
+      password = input.trim();
+      ipAddress = passwordOrIp;
+      userAgent = maybeIp;
+    }
+
+    const normalizedUsername = username.toLowerCase();
+    const admin = await this.prisma.admin.findFirst({
+      where: {
+        OR: [
+          { username: normalizedUsername },
+          { email: normalizedUsername },
+        ],
+      },
+    });
 
     if (!admin) {
       throw new AppError(
-        500,
-        ErrorCode.ADMIN_NOT_INITIALIZED,
-        'Akun admin belum diinisialisasi di database. Jalankan seed terlebih dahulu.'
+        401,
+        ErrorCode.UNAUTHORIZED,
+        'Username atau password Super Admin salah.'
       );
     }
 
@@ -53,16 +89,13 @@ export class AdminAuthService {
       );
     }
 
-    // 2. Verifikasi PIN menggunakan Argon2id
-    const isValid = await verifyPin(pin, admin.pinHash);
+    // 2. Verifikasi Password menggunakan Argon2id
+    const isValid = await verifyPin(password, admin.passwordHash);
 
     if (!isValid) {
       const newAttempts = admin.failedAttempts + 1;
-      let lockedUntil: Date | null = null;
-
-      if (newAttempts >= BRUTE_FORCE_CONFIG.maxAttempts) {
-        lockedUntil = new Date(now.getTime() + BRUTE_FORCE_CONFIG.lockoutMinutes * 60 * 1000);
-      }
+      const lockoutTier = calculateGraduatedLockout(newAttempts);
+      const lockedUntil = lockoutTier ? lockoutTier.lockedUntil : null;
 
       await this.prisma.admin.update({
         where: { id: admin.id },
@@ -72,24 +105,24 @@ export class AdminAuthService {
         },
       });
 
-      if (lockedUntil) {
+      if (lockoutTier && lockedUntil) {
         await logAuditEvent(this.prisma, {
           action: 'ADMIN_LOCKED_OUT',
           adminId: admin.id,
           ipAddress,
           userAgent,
-          details: { failedAttempts: newAttempts, lockedUntil: lockedUntil.toISOString() },
+          details: { failedAttempts: newAttempts, lockedUntil: lockedUntil.toISOString(), minutes: lockoutTier.minutes },
         });
 
         throw new AppError(
           423,
           ErrorCode.ADMIN_LOCKED_OUT,
-          `PIN salah ${BRUTE_FORCE_CONFIG.maxAttempts} kali berturut-turut. Akun dikunci selama ${BRUTE_FORCE_CONFIG.lockoutMinutes} menit.`,
-          { lockedUntil: lockedUntil.toISOString() }
+          `Password salah ${newAttempts} kali berturut-turut. Akun dikunci sementara selama ${lockoutTier.minutes} menit demi keamanan.`,
+          { lockedUntil: lockedUntil.toISOString(), remainingMinutes: lockoutTier.minutes }
         );
       }
 
-      const remainingAttempts = BRUTE_FORCE_CONFIG.maxAttempts - newAttempts;
+      const remainingAttempts = Math.max(1, 3 - newAttempts);
 
       await logAuditEvent(this.prisma, {
         action: 'ADMIN_LOGIN_FAILED',
@@ -102,7 +135,7 @@ export class AdminAuthService {
       throw new AppError(
         401,
         ErrorCode.INVALID_PIN,
-        `PIN tidak valid. Sisa percobaan: ${remainingAttempts} kali sebelum dikunci.`,
+        `Password salah. Sisa percobaan: ${remainingAttempts} kali sebelum dikunci.`,
         { remainingAttempts }
       );
     }
@@ -127,7 +160,15 @@ export class AdminAuthService {
       details: { expiresAt },
     });
 
-    return { token, expiresAt };
+    return {
+      token,
+      expiresAt,
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+      },
+    };
   }
 
   /**
@@ -157,15 +198,12 @@ export class AdminAuthService {
       );
     }
 
-    const isValid = await verifyPin(pin, admin.pinHash);
+    const isValid = await verifyPin(pin, admin.passwordHash);
 
     if (!isValid) {
       const newAttempts = admin.failedAttempts + 1;
-      let lockedUntil: Date | null = null;
-
-      if (newAttempts >= BRUTE_FORCE_CONFIG.maxAttempts) {
-        lockedUntil = new Date(now.getTime() + BRUTE_FORCE_CONFIG.lockoutMinutes * 60 * 1000);
-      }
+      const lockoutTier = calculateGraduatedLockout(newAttempts);
+      const lockedUntil = lockoutTier ? lockoutTier.lockedUntil : null;
 
       await this.prisma.admin.update({
         where: { id: admin.id },
@@ -175,24 +213,24 @@ export class AdminAuthService {
         },
       });
 
-      if (lockedUntil) {
+      if (lockoutTier && lockedUntil) {
         await logAuditEvent(this.prisma, {
           action: 'ADMIN_LOCKED_OUT',
           adminId: admin.id,
           ipAddress,
           userAgent,
-          details: { failedAttempts: newAttempts, lockedUntil: lockedUntil.toISOString() },
+          details: { failedAttempts: newAttempts, lockedUntil: lockedUntil.toISOString(), minutes: lockoutTier.minutes },
         });
 
         throw new AppError(
           423,
           ErrorCode.ADMIN_LOCKED_OUT,
-          `PIN salah ${BRUTE_FORCE_CONFIG.maxAttempts} kali berturut-turut. Akun dikunci selama ${BRUTE_FORCE_CONFIG.lockoutMinutes} menit.`,
-          { lockedUntil: lockedUntil.toISOString() }
+          `PIN salah ${newAttempts} kali berturut-turut. Akun dikunci sementara selama ${lockoutTier.minutes} menit demi keamanan.`,
+          { lockedUntil: lockedUntil.toISOString(), remainingMinutes: lockoutTier.minutes }
         );
       }
 
-      const remainingAttempts = BRUTE_FORCE_CONFIG.maxAttempts - newAttempts;
+      const remainingAttempts = Math.max(1, 3 - newAttempts);
       throw new AppError(
         401,
         ErrorCode.INVALID_PIN,
@@ -214,9 +252,9 @@ export class AdminAuthService {
   }
 
   /**
-   * Mengubah PIN Admin
+   * Mengubah Password Admin
    */
-  async changePin(adminId: string, currentPin: string, newPin: string, ipAddress?: string) {
+  async changePassword(adminId: string, currentPassword: string, newPassword: string, ipAddress?: string) {
     const admin = await this.prisma.admin.findUnique({
       where: { id: adminId },
     });
@@ -225,34 +263,47 @@ export class AdminAuthService {
       throw new AppError(404, ErrorCode.NOT_FOUND, 'Admin tidak ditemukan');
     }
 
-    const isCurrentValid = await verifyPin(currentPin, admin.pinHash);
+    const isCurrentValid = await verifyPin(currentPassword, admin.passwordHash);
     if (!isCurrentValid) {
       throw new AppError(
         400,
         ErrorCode.INVALID_PIN,
-        'PIN saat ini tidak valid. Verifikasi gagal.'
+        'Password saat ini tidak valid. Verifikasi gagal.'
       );
     }
 
-    const newHash = await hashPin(newPin);
+    if (!newPassword || newPassword.length < 6) {
+      throw new AppError(
+        400,
+        ErrorCode.VALIDATION_ERROR,
+        'Password baru minimal harus 6 karakter.'
+      );
+    }
+
+    const newHash = await hashPin(newPassword);
 
     await this.prisma.admin.update({
       where: { id: admin.id },
       data: {
-        pinHash: newHash,
+        passwordHash: newHash,
         failedAttempts: 0,
         lockedUntil: null,
       },
     });
 
     await logAuditEvent(this.prisma, {
-      action: 'ADMIN_PIN_CHANGED',
+      action: 'ADMIN_PASSWORD_CHANGED',
       adminId: admin.id,
       ipAddress,
       details: { timestamp: new Date().toISOString() },
     });
 
-    return { message: 'PIN admin berhasil diperbarui' };
+    return { message: 'Password Super Admin berhasil diperbarui' };
+  }
+
+  // Alias untuk kompatibilitas ke belakang
+  async changePin(adminId: string, currentPin: string, newPin: string, ipAddress?: string) {
+    return this.changePassword(adminId, currentPin, newPin, ipAddress);
   }
 
   /**
@@ -263,6 +314,8 @@ export class AdminAuthService {
       where: { id: adminId },
       select: {
         id: true,
+        username: true,
+        email: true,
         lastLoginAt: true,
         createdAt: true,
         updatedAt: true,

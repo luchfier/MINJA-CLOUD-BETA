@@ -16,7 +16,7 @@ import {
   Check,
   QrCode,
 } from 'lucide-react';
-import { photoboothApi } from '../../../services/photoboothApi';
+import { cloudApi } from '../../../services/cloudApi';
 import type { PartnerItem, OperatorItem, KioskItem } from '../../../types/api';
 
 export interface ThermalReceiptSettingsTabProps {
@@ -237,7 +237,7 @@ export const ThermalReceiptSettingsTab: React.FC<ThermalReceiptSettingsTabProps>
         showWatermark: receiptShowWatermark,
       };
 
-      const res = await photoboothApi.updatePartnerProfile(partnerToken, {
+      const res = await cloudApi.updatePartnerProfile(partnerToken, {
         receiptHeader: receiptHeaderInput.trim(),
         receiptFooter: receiptFooterInput.trim(),
         phone: partnerPhoneInput.trim(),

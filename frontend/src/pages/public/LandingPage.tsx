@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { photoboothApi } from '../../services/photoboothApi';
+import { cloudApi } from '../../services/cloudApi';
 
 import { Language, TRANSLATIONS } from './landing/translations';
 import { LandingNavbar, LandingView } from './landing/components/LandingNavbar';
@@ -69,7 +69,7 @@ export const LandingPage: React.FC = () => {
   };
 
   useEffect(() => {
-    photoboothApi.getPublicSettings().then((res) => {
+    cloudApi.getPublicSettings().then((res) => {
       if (res.success && res.data) {
         updateBranding(res.data);
       }
@@ -88,13 +88,33 @@ export const LandingPage: React.FC = () => {
       document.head.appendChild(metaDesc);
     }
     metaDesc.setAttribute('content', t.hero_desc);
+
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    if (ogTitle) ogTitle.setAttribute('content', t.page_title);
+
+    const ogDesc = document.querySelector('meta[property="og:description"]');
+    if (ogDesc) ogDesc.setAttribute('content', t.hero_desc);
   }, [t]);
-  const whatsappNumber = branding.whatsappNumber || '6281234567890';
+  const whatsappNumber = branding.whatsappNumber || '6281321699090';
   const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
     lang === 'id'
       ? 'Halo Minja Studio, saya ingin menanyakan layanan sewa photobooth untuk acara kami.'
       : 'Hello Minja Studio, I would like to inquire about photobooth rental for our upcoming event.'
   )}`;
+
+  const whatsappUrlPartner = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
+    lang === 'id'
+      ? 'Halo Minja Studio, saya tertarik bermitra untuk penempatan self-service photobooth di kafe/lokasi kami.'
+      : 'Hello Minja Studio, I am interested in partnering for a self-service photobooth placement at our venue.'
+  )}`;
+
+  const getRentWhatsappUrl = (pkgName: string) => {
+    return `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
+      lang === 'id'
+        ? `Halo Minja Studio, saya ingin menanyakan booking paket Sewa ${pkgName} untuk acara kami.`
+        : `Hello Minja Studio, I would like to inquire about booking the ${pkgName} rental package for our event.`
+    )}`;
+  };
 
   const isLocalhost =
     typeof window !== 'undefined' &&
@@ -168,6 +188,7 @@ export const LandingPage: React.FC = () => {
           <RentEventView
             t={t}
             whatsappUrl={whatsappUrl}
+            getRentWhatsappUrl={getRentWhatsappUrl}
             onBackToHome={() => handleNavigate('home')}
           />
         )}
@@ -175,7 +196,7 @@ export const LandingPage: React.FC = () => {
         {currentView === 'partner' && (
           <PartnerCafeView
             t={t}
-            whatsappUrl={whatsappUrl}
+            whatsappUrl={whatsappUrlPartner}
             onBackToHome={() => handleNavigate('home')}
           />
         )}

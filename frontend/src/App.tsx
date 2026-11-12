@@ -51,6 +51,14 @@ export const App: React.FC = () => {
   const isGalleryHost = currentHost.startsWith('gallery.');
   const isRichHost = currentHost.startsWith('rich.');
 
+  // Sinkronisasi URL: jika rich.minja.my.id dibuka tanpa rute (/), sinkronkan address bar ke /partner
+  useEffect(() => {
+    if (isRichHost && (currentPath === '/' || currentPath === '')) {
+      window.history.replaceState(null, '', '/partner');
+      setCurrentPath('/partner');
+    }
+  }, [isRichHost, currentPath]);
+
   // 2. Resolusi Komponen Berdasarkan Aturan Mutlak
   let ActivePortal: React.ComponentType;
 

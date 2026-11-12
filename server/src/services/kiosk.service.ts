@@ -3,10 +3,18 @@
 // Mengelola pendaftaran booth, API key unik per mesin, heartbeat telemetri, dan remote lock
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PrismaClient, KioskStatus } from '@prisma/client';
-import { reloadEnv } from '../config/env.js';
 import { AppError, ErrorCode } from '../types/common.types.js';
+import { getEnv } from '../config/env.js';
 import { humanLogger } from '../utils/humanLogger.js';
+import { calculateWibDateRange } from './partner.service.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const QUEUE_FILE = path.resolve(__dirname, '../../storage/pending-print-commands.json');
 
 export interface CreateKioskDTO {
   name: string;
@@ -68,20 +76,61 @@ export interface KioskItemDto {
 }
 
 export class KioskService {
-  // Antrean perintah cetak jarak jauh per booth (Remote Print Dispatch)
+  // Antrean perintah cetak jarak jauh per booth (Remote Print Dispatch - Persisten Disk & RAM)
   private static pendingPrintCommands = new Map<string, PendingPrintCommand[]>();
+  private static isQueueInitialized = false;
+
+  private static initQueue(): void {
+    if (KioskService.isQueueInitialized) return;
+    KioskService.isQueueInitialized = true;
+    try {
+      if (fs.existsSync(QUEUE_FILE)) {
+        const raw = fs.readFileSync(QUEUE_FILE, 'utf-8');
+        const data = JSON.parse(raw);
+        if (data && typeof data === 'object') {
+          for (const [k, v] of Object.entries(data)) {
+            if (Array.isArray(v)) {
+              KioskService.pendingPrintCommands.set(k, v);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private static saveQueueToDisk(): void {
+    try {
+      const obj: Record<string, PendingPrintCommand[]> = {};
+      for (const [k, v] of KioskService.pendingPrintCommands.entries()) {
+        if (v && v.length > 0) {
+          obj[k] = v;
+        }
+      }
+      const dir = path.dirname(QUEUE_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(QUEUE_FILE, JSON.stringify(obj, null, 2), 'utf-8');
+    } catch {
+      // ignore
+    }
+  }
 
   public static queuePrintCommand(kioskId: string, cmd: PendingPrintCommand): void {
+    KioskService.initQueue();
     const existing = KioskService.pendingPrintCommands.get(kioskId) || [];
     existing.push(cmd);
     KioskService.pendingPrintCommands.set(kioskId, existing);
+    KioskService.saveQueueToDisk();
     humanLogger.info('REMOTE_PRINT_QUEUE', `Perintah cetak didaftarkan untuk booth ${kioskId}: Sesi ${cmd.sessionId} (${cmd.copies} lembar)`);
   }
 
   public static popPrintCommands(kioskId: string): PendingPrintCommand[] {
+    KioskService.initQueue();
     const cmds = KioskService.pendingPrintCommands.get(kioskId) || [];
     if (cmds.length > 0) {
       KioskService.pendingPrintCommands.delete(kioskId);
+      KioskService.saveQueueToDisk();
     }
     return cmds;
   }
@@ -97,7 +146,7 @@ export class KioskService {
   }
 
   /**
-   * Mengambil daftar seluruh mesin booth beserta telemetri dan omzet hari ini
+   * Mengambil daftar seluruh mesin booth beserta telemetri dan omzet hari ini (Batch GroupBy & Presisi WIB UTC+7)
    */
   async listKiosks(): Promise<KioskItemDto[]> {
     const kiosks = await this.prisma.kiosk.findMany({
@@ -105,40 +154,47 @@ export class KioskService {
     });
 
     const now = Date.now();
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const { rangeStart: startOfToday } = calculateWibDateRange('today');
+    const kioskIds = kiosks.map((k) => k.id);
+
+    // BATCH QUERY AGGREGATION: 1 query tunggal menggantikan N+1 sequential loop
+    const todayAggregates = kioskIds.length > 0
+      ? await this.prisma.session.groupBy({
+          by: ['kioskId'],
+          where: {
+            kioskId: { in: kioskIds },
+            createdAt: { gte: startOfToday },
+            state: 'COMPLETED',
+          },
+          _count: { id: true },
+          _sum: { totalPrice: true },
+        })
+      : [];
+
+    const aggMap = new Map<string, { count: number; revenue: number }>();
+    for (const agg of todayAggregates) {
+      if (agg.kioskId) {
+        aggMap.set(agg.kioskId, {
+          count: agg._count.id || 0,
+          revenue: agg._sum.totalPrice || 0,
+        });
+      }
+    }
 
     const result: KioskItemDto[] = [];
 
     for (const kiosk of kiosks) {
-      // Evaluasi status online dinamis (jika heartbeat > 45 detik, tandai OFFLINE)
+      // Evaluasi status online dinamis (jika heartbeat > 4 menit, tandai OFFLINE — menyesuaikan throttle DB write 3 menit)
       let effectiveStatus = kiosk.status;
       if (kiosk.isLocked) {
         effectiveStatus = KioskStatus.MAINTENANCE;
-      } else if (!kiosk.lastHeartbeat || now - new Date(kiosk.lastHeartbeat).getTime() > 45000) {
+      } else if (!kiosk.lastHeartbeat || now - new Date(kiosk.lastHeartbeat).getTime() > 240000) {
         effectiveStatus = KioskStatus.OFFLINE;
       }
 
-      // Hitung omzet dan jumlah sesi selesai hari ini untuk kiosk ini
-      const [todaySessionsCount, todayRevenueAgg] = await Promise.all([
-        this.prisma.session.count({
-          where: {
-            kioskId: kiosk.id,
-            createdAt: { gte: startOfToday },
-            state: 'COMPLETED',
-          },
-        }),
-        this.prisma.session.aggregate({
-          where: {
-            kioskId: kiosk.id,
-            createdAt: { gte: startOfToday },
-            state: 'COMPLETED',
-          },
-          _sum: {
-            totalPrice: true,
-          },
-        }),
-      ]);
+      const agg = aggMap.get(kiosk.id) || { count: 0, revenue: 0 };
+      const todaySessionsCount = agg.count;
+      const todayRevenue = agg.revenue;
 
       result.push({
         id: kiosk.id,
@@ -160,7 +216,7 @@ export class KioskService {
         appVersion: kiosk.appVersion,
         createdAt: kiosk.createdAt.toISOString(),
         updatedAt: kiosk.updatedAt.toISOString(),
-        todayRevenue: todayRevenueAgg._sum.totalPrice || 0,
+        todayRevenue,
         todaySessionsCount,
       });
     }
@@ -177,13 +233,12 @@ export class KioskService {
     });
     if (!kiosk) return null;
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const { rangeStart: startOfToday } = calculateWibDateRange('today');
 
     let effectiveStatus = kiosk.status;
     if (kiosk.isLocked) {
       effectiveStatus = KioskStatus.MAINTENANCE;
-    } else if (!kiosk.lastHeartbeat || Date.now() - new Date(kiosk.lastHeartbeat).getTime() > 45000) {
+    } else if (!kiosk.lastHeartbeat || Date.now() - new Date(kiosk.lastHeartbeat).getTime() > 240000) {
       effectiveStatus = KioskStatus.OFFLINE;
     }
 
@@ -429,13 +484,20 @@ export class KioskService {
       select: {
         id: true,
         code: true,
+        name: true,
+        location: true,
+        status: true,
         hardwareId: true,
         isLocked: true,
+        lockReason: true,
         paperRemaining: true,
+        paperRollCapacity: true,
+        disabledPackageIds: true,
         printerStatus: true,
         cameraStatus: true,
         appVersion: true,
         ipAddress: true,
+        lastHeartbeat: true,
       },
     });
 
@@ -460,29 +522,68 @@ export class KioskService {
       nextStatus = KioskStatus.MAINTENANCE;
     }
 
-    const dataToUpdate: any = {
-      lastHeartbeat: new Date(),
-      status: nextStatus,
-      paperRemaining: payload.paperRemaining !== undefined ? payload.paperRemaining : kiosk.paperRemaining,
-      printerStatus: payload.printerStatus || kiosk.printerStatus,
-      cameraStatus: payload.cameraStatus || kiosk.cameraStatus,
-      appVersion: payload.appVersion || kiosk.appVersion,
-      ipAddress: ipAddress || kiosk.ipAddress,
-    };
+    // Throttle penulisan DB ke Supabase: hanya tulis jika ada perubahan state/kertas/hardwareId, atau lastHeartbeat >= 3 menit lalu
+    const statusChanged = nextStatus !== kiosk.status;
+    const paperChanged = payload.paperRemaining !== undefined && payload.paperRemaining !== kiosk.paperRemaining;
+    const hwNeedsBind = Boolean(incomingHw && !kiosk.hardwareId);
+    const heartbeatStale =
+      !kiosk.lastHeartbeat || Date.now() - new Date(kiosk.lastHeartbeat).getTime() >= 180_000;
 
-    // Otomatis bind hardwareId pada heartbeat pertama jika belum terikat
-    if (incomingHw && !kiosk.hardwareId) {
-      dataToUpdate.hardwareId = incomingHw;
-      humanLogger.success('KIOSK', `Perangkat fisik [${kiosk.code}] berhasil terikat ke Hardware ID: ${incomingHw}`);
+    let updated = kiosk;
+    if (statusChanged || paperChanged || hwNeedsBind || heartbeatStale) {
+      const dataToUpdate: any = {
+        lastHeartbeat: new Date(),
+        status: nextStatus,
+        paperRemaining: payload.paperRemaining !== undefined ? payload.paperRemaining : kiosk.paperRemaining,
+        printerStatus: payload.printerStatus || kiosk.printerStatus,
+        cameraStatus: payload.cameraStatus || kiosk.cameraStatus,
+        appVersion: payload.appVersion || kiosk.appVersion,
+        ipAddress: ipAddress || kiosk.ipAddress,
+      };
+
+      // Otomatis bind hardwareId pada heartbeat pertama jika belum terikat
+      if (hwNeedsBind) {
+        dataToUpdate.hardwareId = incomingHw;
+        humanLogger.success('KIOSK', `Perangkat fisik [${kiosk.code}] berhasil terikat ke Hardware ID: ${incomingHw}`);
+      }
+
+      updated = await this.prisma.kiosk.update({
+        where: { id: kiosk.id },
+        data: dataToUpdate,
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          location: true,
+          status: true,
+          isLocked: true,
+          lockReason: true,
+          hardwareId: true,
+          paperRemaining: true,
+          paperRollCapacity: true,
+          disabledPackageIds: true,
+          printerStatus: true,
+          cameraStatus: true,
+          appVersion: true,
+          ipAddress: true,
+          lastHeartbeat: true,
+        },
+      });
     }
 
-    const updated = await this.prisma.kiosk.update({
-      where: { id: kiosk.id },
-      data: dataToUpdate,
-      select: { id: true, code: true, name: true, location: true, isLocked: true, lockReason: true, hardwareId: true },
-    });
-
     const pendingCommands = KioskService.popPrintCommands(kiosk.id);
+    const env = getEnv();
+    const r2Config =
+      env.S3_ENDPOINT && env.S3_ACCESS_KEY && env.S3_SECRET_KEY
+        ? {
+            s3Endpoint: env.S3_ENDPOINT,
+            s3AccessKey: env.S3_ACCESS_KEY,
+            s3SecretKey: env.S3_SECRET_KEY,
+            s3BucketName: env.S3_BUCKET_NAME || 'backup',
+            s3Region: env.S3_REGION || 'auto',
+            r2PublicDomain: env.R2_PUBLIC_DOMAIN || 'https://tampung.minja.my.id',
+          }
+        : undefined;
 
     return {
       success: true,
@@ -491,151 +592,13 @@ export class KioskService {
       name: updated.name,
       location: updated.location,
       isLocked: updated.isLocked,
-      lockReason: updated.lockReason,
+      lockReason: updated.lockReason || (updated.isLocked ? 'Pengisian ulang kertas foto / pemeliharaan berkala' : undefined),
+      paperRemaining: updated.paperRemaining,
+      paperRollCapacity: updated.paperRollCapacity,
+      isPaperTrackingEnabled: Array.isArray(updated.disabledPackageIds) && updated.disabledPackageIds.includes('__CFG:PAPER_TRACKING_ON__'),
       pendingPrintCommands: pendingCommands,
+      r2Config,
       serverTime: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Kiosk: Mengambil status aktivasi lisensi booth saat ini
-   */
-  async getActivationStatus() {
-    const rawKey = process.env['BOOTH_API_KEY'];
-    if (!rawKey || rawKey === 'dev-booth-key-for-testing' || rawKey === 'ganti-dengan-string-unik-per-mesin') {
-      return {
-        isActivated: false,
-        message: 'Perangkat booth belum diaktivasi dengan Kunci Aktivasi Resmi.',
-      };
-    }
-
-    try {
-      const kiosk = await this.prisma.kiosk.findUnique({
-        where: { apiKey: rawKey.trim() },
-        include: { partner: { select: { id: true, name: true } } },
-      });
-
-      if (!kiosk) {
-        return {
-          isActivated: false,
-          message: 'Kunci aktivasi yang tersimpan tidak ditemukan di database server pusat.',
-        };
-      }
-
-      return {
-        isActivated: true,
-        kiosk: {
-          id: kiosk.id,
-          code: kiosk.code,
-          name: kiosk.name,
-          location: kiosk.location,
-          status: kiosk.status,
-          partnerName: kiosk.partner?.name || null,
-          apiKey: kiosk.apiKey,
-        },
-      };
-    } catch {
-      // Fallback offline bila koneksi database terputus tetapi key sudah terpasang
-      return {
-        isActivated: true,
-        kiosk: {
-          code: 'STANDALONE',
-          name: 'Minja Standalone Booth',
-          location: 'Offline Mode',
-        },
-      };
-    }
-  }
-
-  /**
-   * Kiosk: Mengaktivasi perangkat fisik dengan memasukkan BOOTH_API_KEY
-   */
-  async activateKiosk(apiKey: string, hardwareId?: string) {
-    const raw = (apiKey || '').trim();
-    const cleanKey = raw
-      .replace(/^BOOTH_API_KEY\s*=\s*/i, '')
-      .replace(/^["']|["']$/g, '')
-      .trim();
-
-    if (!cleanKey) {
-      throw new AppError(400, ErrorCode.VALIDATION_ERROR, 'API Key tidak boleh kosong.');
-    }
-
-    const kiosk = await this.prisma.kiosk.findUnique({
-      where: { apiKey: cleanKey },
-      include: { partner: { select: { id: true, name: true } } },
-    });
-
-    if (!kiosk) {
-      throw new AppError(404, ErrorCode.NOT_FOUND, 'Kunci Aktivasi Booth tidak valid atau belum didaftarkan. Hubungi administrator.');
-    }
-
-    // HARDWARE BINDING GUARDRAIL (1 Kunci Lisensi = 1 Perangkat Fisik):
-    const cleanHw = (hardwareId || '').trim();
-    if (cleanHw) {
-      if (kiosk.hardwareId && kiosk.hardwareId !== cleanHw) {
-        throw new AppError(
-          403,
-          ErrorCode.FORBIDDEN,
-          `Kunci aktivasi ini sudah terikat pada perangkat fisik lain (ID: ${kiosk.hardwareId}). Hubungi Admin untuk mereset ikatan perangkat.`
-        );
-      }
-      if (!kiosk.hardwareId) {
-        await this.prisma.kiosk.update({
-          where: { id: kiosk.id },
-          data: { hardwareId: cleanHw },
-        });
-        humanLogger.success('KIOSK', `Booth [${kiosk.code}] terikat ke Hardware ID: ${cleanHw}`);
-      }
-    }
-
-    // Set di runtime process.env
-    process.env['BOOTH_API_KEY'] = cleanKey;
-
-    // Simpan ke file .env secara deterministik
-    try {
-      const fs = await import('node:fs');
-      const path = await import('node:path');
-      const { fileURLToPath } = await import('node:url');
-      const currentDir = path.dirname(fileURLToPath(import.meta.url));
-
-      const candidatePaths = [
-        path.resolve(currentDir, '../../.env'),
-        path.resolve(process.cwd(), 'server/.env'),
-        path.resolve(process.cwd(), '.env'),
-      ];
-
-      for (const envPath of candidatePaths) {
-        if (fs.existsSync(envPath)) {
-          let envContent = fs.readFileSync(envPath, 'utf8');
-          if (envContent.includes('BOOTH_API_KEY=')) {
-            envContent = envContent.replace(/BOOTH_API_KEY=.*/g, `BOOTH_API_KEY=${cleanKey}`);
-          } else {
-            envContent += `\nBOOTH_API_KEY=${cleanKey}\n`;
-          }
-          fs.writeFileSync(envPath, envContent, 'utf8');
-          break;
-        }
-      }
-      reloadEnv();
-    } catch (err) {
-      humanLogger.warn('KIOSK', `Gagal menulis BOOTH_API_KEY ke file .env: ${err}`);
-    }
-
-    humanLogger.success('KIOSK', `Perangkat sukses diaktivasi sebagai [${kiosk.code}] ${kiosk.name}`);
-
-    return {
-      success: true,
-      message: `Aktivasi berhasil! Perangkat terdaftar sebagai [${kiosk.code}] ${kiosk.name}.`,
-      kiosk: {
-        id: kiosk.id,
-        code: kiosk.code,
-        name: kiosk.name,
-        location: kiosk.location,
-        status: kiosk.status,
-        partnerName: kiosk.partner?.name || null,
-        hardwareId: cleanHw || kiosk.hardwareId,
-      },
     };
   }
 

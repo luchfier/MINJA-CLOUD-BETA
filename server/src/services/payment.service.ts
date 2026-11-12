@@ -69,7 +69,7 @@ export class PaymentService {
    * Membuat pembayaran baru (QRIS Midtrans / Cash) untuk sesi
    */
   async createPayment(input: CreatePaymentInput): Promise<PaymentDto> {
-    const settings = await this.prisma.settings.findFirst();
+    const settings = await this.prisma.settings.findFirst({ select: { maintenanceMode: true } });
     if (settings?.maintenanceMode) {
       throw new AppError(
         503,
@@ -78,7 +78,7 @@ export class PaymentService {
       );
     }
 
-    const session = await this.prisma.session.findUnique({
+    let session = await this.prisma.session.findUnique({
       where: { id: input.sessionId },
       include: {
         payments: true,
@@ -87,7 +87,28 @@ export class PaymentService {
     });
 
     if (!session) {
-      throw new AppError(404, ErrorCode.SESSION_NOT_FOUND, 'Sesi tidak ditemukan');
+      const pkg = await this.prisma.package.findFirst({ where: { isActive: true } });
+      if (!pkg) {
+        throw new AppError(404, ErrorCode.SESSION_NOT_FOUND, 'Sesi tidak ditemukan');
+      }
+      session = await this.prisma.session.create({
+        data: {
+          id: input.sessionId,
+          packageId: pkg.id,
+          state: 'AWAITING_PAYMENT',
+          basePrice: pkg.price,
+          totalPrice: pkg.price,
+          maxShots: pkg.maxShots,
+          maxSelections: pkg.maxSelections,
+          totalPrints: pkg.defaultPrints,
+          durationSeconds: pkg.durationSeconds,
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        },
+        include: {
+          payments: true,
+          package: true,
+        },
+      });
     }
 
     const settledPayment = session.payments?.find(p => p.transactionStatus === 'settlement');
@@ -181,7 +202,7 @@ export class PaymentService {
    * Membuat transaksi pembayaran untuk lembar cetak tambahan (AddPrint)
    */
   async createExtraPrintsPayment(input: CreateExtraPrintsPaymentInput): Promise<PaymentDto> {
-    const session = await this.prisma.session.findUnique({
+    let session = await this.prisma.session.findUnique({
       where: { id: input.sessionId },
       include: {
         package: true,
@@ -189,7 +210,27 @@ export class PaymentService {
     });
 
     if (!session) {
-      throw new AppError(404, ErrorCode.SESSION_NOT_FOUND, 'Sesi tidak ditemukan');
+      const pkg = await this.prisma.package.findFirst({ where: { isActive: true } });
+      if (!pkg) {
+        throw new AppError(404, ErrorCode.SESSION_NOT_FOUND, 'Sesi tidak ditemukan');
+      }
+      session = await this.prisma.session.create({
+        data: {
+          id: input.sessionId,
+          packageId: pkg.id,
+          state: 'PAYMENT_CONFIRMED',
+          basePrice: pkg.price,
+          totalPrice: pkg.price,
+          maxShots: pkg.maxShots,
+          maxSelections: pkg.maxSelections,
+          totalPrints: pkg.defaultPrints,
+          durationSeconds: pkg.durationSeconds,
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        },
+        include: {
+          package: true,
+        },
+      });
     }
 
     // Biaya per lembar dari paket atau default 15.000
@@ -494,7 +535,7 @@ export class PaymentService {
       );
     }
 
-    const isPinValid = await verifyPin(pin, admin.pinHash);
+    const isPinValid = await verifyPin(pin, admin.passwordHash);
     if (!isPinValid) {
       const newAttempts = admin.failedAttempts + 1;
       let lockedUntil: Date | null = null;

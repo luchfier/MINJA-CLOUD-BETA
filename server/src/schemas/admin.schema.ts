@@ -5,25 +5,23 @@
 import { z } from 'zod';
 
 export const adminLoginSchema = z.object({
-  pin: z
-    .string()
-    .min(6, 'PIN minimal 6 digit')
-    .max(12, 'PIN maksimal 12 digit')
-    .regex(/^\d+$/, 'PIN hanya boleh berisi angka (digit)'),
+  username: z.string().min(3, 'Username atau email minimal 3 karakter').max(100).optional(),
+  password: z.string().min(4, 'Password minimal 4 karakter').optional(),
+  pin: z.string().optional(),
+}).refine((data) => (data.username && data.password) || data.pin, {
+  message: 'Username dan password wajib diisi',
 });
 
-export const adminChangePinSchema = z.object({
-  currentPin: z
-    .string()
-    .min(6, 'PIN saat ini minimal 6 digit')
-    .max(12, 'PIN saat ini maksimal 12 digit')
-    .regex(/^\d+$/, 'PIN hanya boleh berisi angka'),
-  newPin: z
-    .string()
-    .min(6, 'PIN baru minimal 6 digit')
-    .max(12, 'PIN baru maksimal 12 digit')
-    .regex(/^\d+$/, 'PIN baru hanya boleh berisi angka'),
+export const adminChangePasswordSchema = z.object({
+  currentPassword: z.string().min(4, 'Password saat ini minimal 4 karakter').optional(),
+  newPassword: z.string().min(6, 'Password baru minimal 6 karakter').optional(),
+  currentPin: z.string().optional(),
+  newPin: z.string().optional(),
+}).refine((data) => (data.currentPassword && data.newPassword) || (data.currentPin && data.newPin), {
+  message: 'Password saat ini dan password baru wajib diisi',
 });
+
+export const adminChangePinSchema = adminChangePasswordSchema;
 
 const hexColorRegex = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/;
 

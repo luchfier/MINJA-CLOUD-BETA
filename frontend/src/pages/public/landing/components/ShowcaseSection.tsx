@@ -49,6 +49,8 @@ export const ShowcaseSection: React.FC<ShowcaseSectionProps> = ({ t }) => {
                     <img
                       src="/images/landing/showcase-candid-1.jpg"
                       alt="Dua sahabat pose ceria di bilik studio Minja"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover contrast-105"
                     />
                   </div>
@@ -56,6 +58,8 @@ export const ShowcaseSection: React.FC<ShowcaseSectionProps> = ({ t }) => {
                     <img
                       src="/images/landing/showcase-candid-2.jpg"
                       alt="Tiga sahabat pose seru dan tertawa di studio Minja"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover contrast-105"
                     />
                   </div>
@@ -63,6 +67,8 @@ export const ShowcaseSection: React.FC<ShowcaseSectionProps> = ({ t }) => {
                     <img
                       src="/images/landing/showcase-candid-3.jpg"
                       alt="Empat sahabat huddle seru di bilik foto Minja"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover contrast-105"
                     />
                   </div>

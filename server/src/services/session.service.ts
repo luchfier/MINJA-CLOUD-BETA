@@ -7,6 +7,7 @@ import { AppError, ErrorCode } from '../types/common.types.js';
 import { getEnv } from '../config/env.js';
 import { formatSessionCode } from '../utils/session.util.js';
 import { humanLogger } from '../utils/humanLogger.js';
+import { TransactionEngineService } from './transactionEngine.service.js';
 import type {
   CreateSessionInput,
   UpdateSessionStateInput,
@@ -94,7 +95,7 @@ export class SessionService {
    * Membuat sesi baru berdasarkan paket yang dipilih pelanggan
    */
   async createSession(input: CreateSessionInput, callerKioskId?: string): Promise<SessionDto> {
-    const settings = await this.prisma.settings.findFirst();
+    const settings = await this.prisma.settings.findFirst({ select: { maintenanceMode: true } });
     if (settings?.maintenanceMode) {
       throw new AppError(
         503,
@@ -120,17 +121,31 @@ export class SessionService {
     const totalPrice = pkg.price + additionalPrintCost;
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 menit
 
-    // Hasilkan ID sesi terstruktur non-random via SessionNameEngine (MJA01-YYYYMMDD-0001)
-    let sessionPrefix = 'MJA';
-    try {
-      const code = (getEnv().KIOSK_CODE || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-      if (code.length > 0) {
-        sessionPrefix = code;
+    // Gunakan ID sesi dari Kiosk jika dikirim (Opsi 2 Local-First), atau hasilkan via SessionNameEngine
+    let sessionId = input.id ? input.id.trim().replace(/[^a-zA-Z0-9_-]/g, '_') : '';
+    if (sessionId) {
+      const existingSession = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        include: {
+          package: true,
+          payments: true,
+        },
+      });
+      if (existingSession) {
+        return this.mapToDto(existingSession);
       }
-    } catch {
-      // fallback to MJA
+    } else {
+      let sessionPrefix = 'MJA';
+      try {
+        const code = (getEnv().KIOSK_CODE || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        if (code.length > 0) {
+          sessionPrefix = code;
+        }
+      } catch {
+        // fallback to MJA
+      }
+      sessionId = await this.sessionNameEngine.generateNextSessionId({ prefix: sessionPrefix });
     }
-    const sessionId = await this.sessionNameEngine.generateNextSessionId({ prefix: sessionPrefix });
 
     // Temukan Kiosk ID jika diberikan oleh route / auth middleware atau jika booth memiliki API key terdaftar
     let matchedKioskId: string | null = callerKioskId || null;
@@ -244,29 +259,167 @@ export class SessionService {
   }
 
   /**
-   * Menyelesaikan sesi foto
+   * Menyelesaikan sesi foto (mendukung Lazy Cloud Sync jika sesi belum terdaftar di Supabase)
    */
-  async completeSession(id: string, input: CompleteSessionInput): Promise<SessionDto> {
-    const existing = await this.prisma.session.findUnique({ where: { id } });
-    if (!existing) {
-      throw new AppError(404, ErrorCode.SESSION_NOT_FOUND, 'Sesi tidak ditemukan');
+  async completeSession(id: string, input: CompleteSessionInput, callerKioskId?: string): Promise<SessionDto> {
+    let existing = await this.prisma.session.findUnique({ where: { id } });
+
+    // Hitung total pembayaran riil dari settledPayments jika dikirim oleh Kiosk
+    let syncedTotalPrice: number | undefined;
+    let syncedAdditionalPrints: number | undefined;
+    let syncedAdditionalPrintCost: number | undefined;
+
+    if (Array.isArray(input.settledPayments) && input.settledPayments.length > 0) {
+      let totalPaid = 0;
+      let extraPrints = 0;
+      let extraCost = 0;
+      for (const sp of input.settledPayments) {
+        const amt = Math.max(0, Number(sp.grossAmount) || 0);
+        totalPaid += amt;
+        if (String(sp.orderId || '').includes('-EXT-')) {
+          extraCost += amt;
+          extraPrints += Math.max(1, Number(sp.printCopies) || 1);
+        }
+      }
+      syncedTotalPrice = totalPaid;
+      if (extraPrints > 0) {
+        syncedAdditionalPrints = extraPrints;
+        syncedAdditionalPrintCost = extraCost;
+      }
     }
 
-    const updated = await this.prisma.session.update({
-      where: { id },
-      data: {
-        state: 'COMPLETED',
-        completedAt: new Date(),
-        shotsTaken: input.shotsTaken,
-        photosSelected: input.photosSelected,
-        photosPrinted: input.photosPrinted,
-        ...(input.templateId ? { templateId: input.templateId } : {}),
-      },
-      include: {
-        package: true,
-        payments: true,
-      },
-    });
+    let updated: any;
+
+    if (!existing) {
+      let pkg = input.packageId
+        ? await this.prisma.package.findUnique({ where: { id: input.packageId } })
+        : null;
+      if (!pkg) {
+        pkg = await this.prisma.package.findFirst({ where: { isActive: true } });
+      }
+      if (!pkg) {
+        throw new AppError(404, ErrorCode.SESSION_NOT_FOUND, 'Sesi tidak ditemukan');
+      }
+
+      let matchedKioskId: string | null = callerKioskId || null;
+      if (!matchedKioskId && id.includes('-')) {
+        const prefix = id.split('-')[0];
+        if (prefix && prefix.length >= 2) {
+          const foundKiosk = await this.prisma.kiosk
+            .findFirst({
+              where: {
+                OR: [
+                  { code: { equals: prefix, mode: 'insensitive' } },
+                  { code: { startsWith: prefix, mode: 'insensitive' } },
+                ],
+              },
+              select: { id: true },
+            })
+            .catch(() => null);
+          if (foundKiosk) matchedKioskId = foundKiosk.id;
+        }
+      }
+
+      updated = await this.prisma.session.create({
+        data: {
+          id,
+          packageId: pkg.id,
+          kioskId: matchedKioskId,
+          state: 'COMPLETED',
+          completedAt: new Date(),
+          basePrice: pkg.price,
+          additionalPrints: syncedAdditionalPrints ?? 0,
+          additionalPrintCost: syncedAdditionalPrintCost ?? 0,
+          totalPrice: syncedTotalPrice ?? pkg.price,
+          maxShots: pkg.maxShots,
+          maxSelections: pkg.maxSelections,
+          totalPrints: pkg.defaultPrints + (syncedAdditionalPrints ?? 0),
+          durationSeconds: pkg.durationSeconds,
+          shotsTaken: input.shotsTaken,
+          photosSelected: input.photosSelected,
+          photosPrinted: input.photosPrinted,
+          ...(input.templateId ? { templateId: input.templateId } : {}),
+          expiresAt: new Date(Date.now() + 48 * 3600 * 1000),
+        },
+        include: {
+          package: true,
+          payments: true,
+        },
+      });
+      existing = updated;
+    } else {
+      let validPackageId: string | undefined;
+      if (input.packageId && input.packageId !== existing.packageId) {
+        const foundPkg = await this.prisma.package.findUnique({
+          where: { id: input.packageId },
+          select: { id: true },
+        });
+        if (foundPkg) validPackageId = foundPkg.id;
+      }
+
+      updated = await this.prisma.session.update({
+        where: { id },
+        data: {
+          state: 'COMPLETED',
+          completedAt: new Date(),
+          shotsTaken: input.shotsTaken,
+          photosSelected: input.photosSelected,
+          photosPrinted: input.photosPrinted,
+          ...(validPackageId ? { packageId: validPackageId } : {}),
+          ...(callerKioskId && !existing.kioskId ? { kioskId: callerKioskId } : {}),
+          ...(syncedTotalPrice !== undefined ? { totalPrice: syncedTotalPrice } : {}),
+          ...(syncedAdditionalPrints !== undefined ? { additionalPrints: syncedAdditionalPrints } : {}),
+          ...(syncedAdditionalPrintCost !== undefined ? { additionalPrintCost: syncedAdditionalPrintCost } : {}),
+          ...(input.templateId ? { templateId: input.templateId } : {}),
+        },
+        include: {
+          package: true,
+          payments: true,
+        },
+      });
+    }
+
+    // Sinkronkan bukti transaksi lunas (settledPayments) dari Kiosk (offline/PROMO_FREE/Cash/Extra Prints)
+    if (Array.isArray(input.settledPayments) && input.settledPayments.length > 0) {
+      for (const sp of input.settledPayments) {
+        if (!sp?.orderId) continue;
+        const mRaw = String(sp.paymentMethod || '').toUpperCase();
+        const paymentType =
+          mRaw === 'CASH'
+            ? 'cash'
+            : mRaw === 'ACCESS_CODE'
+            ? 'access_code'
+            : mRaw === 'PROMO_FREE'
+            ? 'promo_free'
+            : mRaw === 'TEST_BYPASS'
+            ? 'test_bypass'
+            : 'qris';
+        const settledAt = sp.settlementTime ? new Date(sp.settlementTime) : new Date();
+        const validSettledAt = isNaN(settledAt.getTime()) ? new Date() : settledAt;
+
+        await this.prisma.payment.upsert({
+          where: { orderId: sp.orderId },
+          create: {
+            sessionId: id,
+            orderId: sp.orderId,
+            grossAmount: Math.max(0, Number(sp.grossAmount) || 0),
+            paymentType,
+            transactionStatus: 'settlement',
+            isVerified: true,
+            expiryTime: new Date(validSettledAt.getTime() + 15 * 60 * 1000),
+            settlementTime: validSettledAt,
+          },
+          update: {
+            grossAmount: Math.max(0, Number(sp.grossAmount) || 0),
+            paymentType,
+            transactionStatus: 'settlement',
+            isVerified: true,
+            settlementTime: validSettledAt,
+          },
+        }).catch((e) => console.warn('[SessionService] Gagal upsert settled payment:', e));
+      }
+      TransactionEngineService.invalidateCache();
+    }
 
     if (input.finalPhotoUrl) {
       await this.prisma.photo.upsert({

@@ -32,8 +32,7 @@ import {
   Coins,
   Smartphone,
 } from 'lucide-react';
-import { photoboothApi } from '../../services/photoboothApi';
-import { isJwtExpired } from '../../services/httpPhotoboothApi';
+import { cloudApi, isJwtExpired } from '../../services/cloudApi';
 import { RecentSessionItem, AccessCodeItem } from '../../types/api';
 import { PackageItem } from '../../types/package';
 import { QRCodeCanvas } from '../../components/common/QRCodeCanvas';
@@ -226,11 +225,11 @@ export const OperatorPortal: React.FC = () => {
     setIsLoading(true);
     try {
       const [kioskRes, sessionsRes, passesRes, packagesRes, shiftRes] = await Promise.all([
-        photoboothApi.getOperatorKioskStatus(operatorToken),
-        photoboothApi.getOperatorRecentSessions(operatorToken, 10),
-        photoboothApi.getOperatorPasses(operatorToken),
-        photoboothApi.getOperatorPackages(operatorToken),
-        photoboothApi.getOperatorShiftSummary(operatorToken),
+        cloudApi.getOperatorKioskStatus(operatorToken),
+        cloudApi.getOperatorRecentSessions(operatorToken, 10),
+        cloudApi.getOperatorPasses(operatorToken),
+        cloudApi.getOperatorPackages(operatorToken),
+        cloudApi.getOperatorShiftSummary(operatorToken),
       ]);
 
       if (kioskRes.success && kioskRes.data) {
@@ -272,7 +271,7 @@ export const OperatorPortal: React.FC = () => {
       const interval = setInterval(() => {
         if (typeof document !== 'undefined' && document.hidden) return;
         fetchAllOperatorData();
-      }, 20000);
+      }, 30000);
 
       const handleVisibilityChange = () => {
         if (typeof document !== 'undefined' && !document.hidden) {
@@ -294,7 +293,7 @@ export const OperatorPortal: React.FC = () => {
     setLoginError(null);
 
     try {
-      const res = await photoboothApi.operatorLogin(username.trim(), pin.trim());
+      const res = await cloudApi.operatorLogin(username.trim(), pin.trim());
       if (res.success) {
         const { token, operator } = res.data;
         setOperatorToken(token);
@@ -342,7 +341,7 @@ export const OperatorPortal: React.FC = () => {
     if (!operatorToken) return;
     setIsGeneratingPass(true);
     try {
-      const res = await photoboothApi.operatorGeneratePass(operatorToken, {
+      const res = await cloudApi.operatorGeneratePass(operatorToken, {
         packageId: passType === 'SESSION' ? selectedPackageId || undefined : undefined,
         amount: parseInt(passAmount, 10) || (passType === 'SESSION' ? 35000 : 15000),
         type: passType,
@@ -388,7 +387,7 @@ export const OperatorPortal: React.FC = () => {
     setIsUpdatingPaper(true);
     try {
       const count = parseInt(manualPaperInput, 10) || 0;
-      const res = await photoboothApi.updateOperatorPaper(operatorToken, count);
+      const res = await cloudApi.updateOperatorPaper(operatorToken, count);
       if (res.success) {
         setStatusMessage({
           type: 'success',
@@ -416,7 +415,7 @@ export const OperatorPortal: React.FC = () => {
     if (!selectedSessionForReprint || !operatorToken) return;
     setIsReprinting(true);
     try {
-      const res = await photoboothApi.operatorReprintSession(
+      const res = await cloudApi.operatorReprintSession(
         operatorToken,
         selectedSessionForReprint.id,
         reprintCopies,

@@ -29,7 +29,6 @@ import {
   AlertCircle,
   Loader2,
   Plus,
-  UploadCloud,
   Receipt,
   Building2,
   Edit,
@@ -56,8 +55,7 @@ import {
   FileText,
   Zap,
 } from 'lucide-react';
-import { photoboothApi } from '../../services/photoboothApi';
-import { isJwtExpired } from '../../services/httpPhotoboothApi';
+import { cloudApi, isJwtExpired } from '../../services/cloudApi';
 import { ExecutiveSummaryModal } from '../../components/admin/ExecutiveSummaryModal';
 import { usePwaInstall } from '../../utils/usePwaInstall';
 import {
@@ -104,7 +102,6 @@ export const PartnerPortal: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
-  const [isSyncingPending, setIsSyncingPending] = useState(false);
 
   // Tangkap event 401 Unauthorized secara terpusat & watchdog kedaluwarsa JWT proaktif
   useEffect(() => {
@@ -372,7 +369,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsLoading(true);
     try {
-      const kiosksRes = await photoboothApi.getMyKiosks(partnerToken);
+      const kiosksRes = await cloudApi.getMyKiosks(partnerToken);
       if (kiosksRes.success && kiosksRes.data) {
         setMyKiosks(kiosksRes.data);
         if (!selectedPackageKioskId && kiosksRes.data.length > 0) {
@@ -391,7 +388,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsLoadingFinancial(true);
     try {
-      const res = await photoboothApi.getPartnerFinancialAnalytics(partnerToken, {
+      const res = await cloudApi.getPartnerFinancialAnalytics(partnerToken, {
         period: financialPeriod,
         kioskId: financialKioskId !== 'ALL' ? financialKioskId : undefined,
         startDate: financialPeriod === 'custom' ? financialStartDate : undefined,
@@ -412,7 +409,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsLoadingTx(true);
     try {
-      const res = await photoboothApi.getPartnerTransactions(partnerToken, {
+      const res = await cloudApi.getPartnerTransactions(partnerToken, {
         kioskId: financialKioskId !== 'ALL' ? financialKioskId : undefined,
         status: txStatus !== 'ALL' ? txStatus : undefined,
         search: txSearch.trim() || undefined,
@@ -439,7 +436,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsLoadingVouchers(true);
     try {
-      const res = await photoboothApi.getPartnerVouchers(partnerToken);
+      const res = await cloudApi.getPartnerVouchers(partnerToken);
       if (res.success && res.data) {
         setVouchers(res.data);
       }
@@ -455,7 +452,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsLoadingSessions(true);
     try {
-      const res = await photoboothApi.getPartnerSessions(partnerToken, {
+      const res = await cloudApi.getPartnerSessions(partnerToken, {
         kioskId: sessionKioskFilter !== 'ALL' ? sessionKioskFilter : undefined,
         search: sessionSearch.trim() || undefined,
         page: sessionPage,
@@ -477,7 +474,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsLoadingPackages(true);
     try {
-      const res = await photoboothApi.getPartnerPackages(partnerToken);
+      const res = await cloudApi.getPartnerPackages(partnerToken);
       if (res.success && res.data) {
         setPackagesList(res.data.packages);
         setPackageKiosksData(res.data.kiosks);
@@ -498,8 +495,8 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     try {
       const [opsRes, passesRes] = await Promise.all([
-        photoboothApi.getPartnerOperators(partnerToken),
-        photoboothApi.getPartnerPasses(partnerToken, 100),
+        cloudApi.getPartnerOperators(partnerToken),
+        cloudApi.getPartnerPasses(partnerToken, 100),
       ]);
       if (opsRes.success && opsRes.data) setMyOperators(opsRes.data);
       if (passesRes.success && passesRes.data) setMyPasses(passesRes.data);
@@ -508,14 +505,12 @@ export const PartnerPortal: React.FC = () => {
     }
   }, [partnerToken]);
 
-  // Initial load
+  // Initial load (master kiosks & profile; analytics/transactions dimuat oleh useEffect activeTab di bawah agar tidak double-fetch)
   useEffect(() => {
     if (partnerToken) {
       fetchKiosksAndProfile();
-      fetchFinancialAnalytics();
-      fetchTransactions();
     }
-  }, [partnerToken, fetchKiosksAndProfile, fetchFinancialAnalytics, fetchTransactions]);
+  }, [partnerToken, fetchKiosksAndProfile]);
 
   // Fetch data on tab change
   useEffect(() => {
@@ -567,7 +562,7 @@ export const PartnerPortal: React.FC = () => {
     setLoginError(null);
 
     try {
-      const res = await photoboothApi.partnerLogin(loginEmail, loginPassword);
+      const res = await cloudApi.partnerLogin(loginEmail, loginPassword);
       if (res.success) {
         localStorage.setItem('minja_partner_token', res.data.token);
         localStorage.setItem('minja_partner_info', JSON.stringify(res.data.partner));
@@ -593,39 +588,12 @@ export const PartnerPortal: React.FC = () => {
     setLoginPassword('');
   };
 
-  // Manual Force Sync Cloud handler for Partner
-  const handlePartnerForceSync = async () => {
-    if (!partnerToken) return;
-    setIsSyncingPending(true);
-    try {
-      const res = await photoboothApi.partnerForceSync(partnerToken);
-      if (res.success && res.data) {
-        showNotification(`✅ ${res.data.message || 'Data pending berhasil disinkronkan ke database!'}`);
-        if (activeTab === 'analytics') {
-          fetchFinancialAnalytics();
-          fetchTransactions();
-        } else if (activeTab === 'sessions') {
-          fetchSessions();
-        } else if (activeTab === 'kiosks') {
-          fetchKiosksAndProfile();
-        }
-      } else {
-        const errMsg = !res.success ? res.error?.message : 'Gagal sinkronisasi data pending.';
-        showNotification(undefined, errMsg || 'Gagal sinkronisasi.');
-      }
-    } catch (e: any) {
-      showNotification(undefined, e?.message || 'Koneksi gagal');
-    } finally {
-      setIsSyncingPending(false);
-    }
-  };
-
   // CSV Export handler
   const handleExportCsv = async () => {
     if (!partnerToken) return;
     setIsExportingCsv(true);
     try {
-      const csvString = await photoboothApi.exportPartnerTransactionsCsv(partnerToken, {
+      const csvString = await cloudApi.exportPartnerTransactionsCsv(partnerToken, {
         kioskId: financialKioskId !== 'ALL' ? financialKioskId : undefined,
         status: txStatus !== 'ALL' ? txStatus : undefined,
         search: txSearch.trim() || undefined,
@@ -662,7 +630,7 @@ export const PartnerPortal: React.FC = () => {
     setIsCreatingVoucher(true);
 
     try {
-      const res = await photoboothApi.createPartnerVoucher(partnerToken, {
+      const res = await cloudApi.createPartnerVoucher(partnerToken, {
         code: voucherCode.trim().toUpperCase(),
         name: voucherName.trim() || voucherCode.trim().toUpperCase(),
         discountType: voucherType,
@@ -694,7 +662,7 @@ export const PartnerPortal: React.FC = () => {
   const handleToggleVoucher = async (id: string) => {
     if (!partnerToken) return;
     try {
-      const res = await photoboothApi.togglePartnerVoucher(partnerToken, id);
+      const res = await cloudApi.togglePartnerVoucher(partnerToken, id);
       if (res.success) {
         showNotification('Status voucher berhasil diperbarui.');
         fetchVouchers();
@@ -710,7 +678,7 @@ export const PartnerPortal: React.FC = () => {
     if (!window.confirm(`Hapus voucher ${code}? Tindakan ini tidak dapat dibatalkan.`)) return;
 
     try {
-      const res = await photoboothApi.deletePartnerVoucher(partnerToken, id);
+      const res = await cloudApi.deletePartnerVoucher(partnerToken, id);
       if (res.success) {
         showNotification(`Voucher ${code} berhasil dihapus.`);
         fetchVouchers();
@@ -737,7 +705,7 @@ export const PartnerPortal: React.FC = () => {
     setIsSavingPackages(true);
 
     try {
-      const res = await photoboothApi.updatePartnerKioskPackages(partnerToken, selectedPackageKioskId, disabledPkgIds);
+      const res = await cloudApi.updatePartnerKioskPackages(partnerToken, selectedPackageKioskId, disabledPkgIds);
       if (res.success) {
         showNotification('Konfigurasi paket booth berhasil disimpan.');
         fetchPackages();
@@ -757,7 +725,7 @@ export const PartnerPortal: React.FC = () => {
     setIsResettingKiosk(true);
 
     try {
-      const res = await photoboothApi.remoteResetPartnerKiosk(partnerToken, resetKioskTarget.id);
+      const res = await cloudApi.remoteResetPartnerKiosk(partnerToken, resetKioskTarget.id);
       if (res.success) {
         showNotification(`Booth [${resetKioskTarget.code}] berhasil direset ke mode standby.`);
         setResetKioskTarget(null);
@@ -778,7 +746,7 @@ export const PartnerPortal: React.FC = () => {
     setIsBypassingKiosk(true);
 
     try {
-      const res = await photoboothApi.remoteBypassPartnerKiosk(partnerToken, bypassKioskTarget.id);
+      const res = await cloudApi.remoteBypassPartnerKiosk(partnerToken, bypassKioskTarget.id);
       if (res.success && res.data) {
         showNotification(res.data.message || `Booth [${bypassKioskTarget.code}] berhasil di-bypass.`);
         if (res.data.mode === 'PASS_CODE_GENERATED' && res.data.passCode) {
@@ -816,7 +784,7 @@ export const PartnerPortal: React.FC = () => {
 
     try {
       const targetState = !lockKiosk.isLocked;
-      const res = await photoboothApi.remoteLockPartnerKiosk(
+      const res = await cloudApi.remoteLockPartnerKiosk(
         partnerToken,
         lockKiosk.id,
         targetState,
@@ -848,7 +816,7 @@ export const PartnerPortal: React.FC = () => {
 
     setIsSavingPaper(true);
     try {
-      const res = await photoboothApi.updatePartnerKioskPaper(partnerToken, paperModalKiosk.id, sheets, true);
+      const res = await cloudApi.updatePartnerKioskPaper(partnerToken, paperModalKiosk.id, sheets, true);
       if (res.success) {
         showNotification(`Sisa kertas [${paperModalKiosk.code}] diperbarui menjadi ${sheets} lembar (Pelacakan Aktif).`);
         setPaperModalKiosk(null);
@@ -868,7 +836,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     const nextState = !kiosk.paperTrackingEnabled;
     try {
-      const res = await photoboothApi.updatePartnerKioskPaper(partnerToken, kiosk.id, kiosk.paperRemaining, nextState);
+      const res = await cloudApi.updatePartnerKioskPaper(partnerToken, kiosk.id, kiosk.paperRemaining, nextState);
       if (res.success) {
         showNotification(
           nextState
@@ -891,7 +859,7 @@ export const PartnerPortal: React.FC = () => {
     setIsUpdatingKiosk(true);
 
     try {
-      const res = await photoboothApi.updatePartnerKiosk(partnerToken, editingKiosk.id, {
+      const res = await cloudApi.updatePartnerKiosk(partnerToken, editingKiosk.id, {
         name: editKioskName.trim(),
         location: editKioskLocation.trim(),
         code: editKioskCode.trim().toUpperCase(),
@@ -936,7 +904,7 @@ export const PartnerPortal: React.FC = () => {
     setIsSubmittingPackage(true);
     try {
       if (editingPackage) {
-        const res = await photoboothApi.updatePartnerPackage(partnerToken, editingPackage.id, {
+        const res = await cloudApi.updatePartnerPackage(partnerToken, editingPackage.id, {
           name: pkgName.trim(),
           description: pkgDescription.trim(),
           price,
@@ -955,7 +923,7 @@ export const PartnerPortal: React.FC = () => {
           showNotification(undefined, res.error?.message || 'Gagal memperbarui paket.');
         }
       } else {
-        const res = await photoboothApi.createPartnerPackage(partnerToken, {
+        const res = await cloudApi.createPartnerPackage(partnerToken, {
           name: pkgName.trim(),
           description: pkgDescription.trim(),
           price,
@@ -991,7 +959,7 @@ export const PartnerPortal: React.FC = () => {
 
     setDeletingPackageId(pkg.id);
     try {
-      const res = await photoboothApi.deletePartnerPackage(partnerToken, pkg.id);
+      const res = await cloudApi.deletePartnerPackage(partnerToken, pkg.id);
       if (res.success) {
         showNotification(`Paket "${pkg.name}" berhasil dihapus.`);
         fetchPackages();
@@ -1018,7 +986,7 @@ export const PartnerPortal: React.FC = () => {
 
     setIsCreatingPass(true);
     try {
-      const res = await photoboothApi.createPartnerPass(partnerToken, {
+      const res = await cloudApi.createPartnerPass(partnerToken, {
         type: passType,
         packageId: passType === 'SESSION' && passPackageId ? passPackageId : null,
         extraPrints: passType === 'EXTRA_PRINT' ? passExtraPrints : 0,
@@ -1055,7 +1023,7 @@ export const PartnerPortal: React.FC = () => {
     }
     setIsDeletingPass(true);
     try {
-      const res = await photoboothApi.deletePartnerPass(partnerToken, pass.id);
+      const res = await cloudApi.deletePartnerPass(partnerToken, pass.id);
       if (res.success) {
         showNotification(res.data?.message || `Kode PASS [${pass.code}] berhasil dihapus!`);
         setPassToDelete(null);
@@ -1083,7 +1051,7 @@ export const PartnerPortal: React.FC = () => {
     }
     setIsRevokingPass(true);
     try {
-      const res = await photoboothApi.revokePartnerPass(partnerToken, pass.id, reason);
+      const res = await cloudApi.revokePartnerPass(partnerToken, pass.id, reason);
       if (res.success) {
         showNotification(res.data?.message || `Kode PASS [${pass.code}] berhasil dibatalkan.`);
         setPassToRevoke(null);
@@ -1112,7 +1080,7 @@ export const PartnerPortal: React.FC = () => {
     }
     setIsExtendingPass(true);
     try {
-      const res = await photoboothApi.extendPartnerPass(partnerToken, pass.id, hours);
+      const res = await cloudApi.extendPartnerPass(partnerToken, pass.id, hours);
       if (res.success) {
         showNotification(res.data?.message || `Masa berlaku kode [${pass.code}] diperpanjang +${hours} jam!`);
         setPassToExtend(null);
@@ -1224,7 +1192,7 @@ export const PartnerPortal: React.FC = () => {
     setIsCreatingOp(true);
 
     try {
-      const res = await photoboothApi.createPartnerOperator(partnerToken, {
+      const res = await cloudApi.createPartnerOperator(partnerToken, {
         name: newOpName.trim(),
         username: newOpUsername.trim().toLowerCase(),
         pin: newOpPin.trim(),
@@ -1256,7 +1224,7 @@ export const PartnerPortal: React.FC = () => {
     setIsUpdatingOp(true);
 
     try {
-      const res = await photoboothApi.updatePartnerOperator(partnerToken, editingOperator.id, {
+      const res = await cloudApi.updatePartnerOperator(partnerToken, editingOperator.id, {
         name: editOpName.trim(),
         pin: editOpPin.trim() || undefined,
         kioskId: editOpKioskId && editOpKioskId !== 'ALL' ? editOpKioskId : null,
@@ -1282,7 +1250,7 @@ export const PartnerPortal: React.FC = () => {
     if (!partnerToken) return;
     setIsDeletingOp(true);
     try {
-      const res = await photoboothApi.deletePartnerOperator(partnerToken, op.id);
+      const res = await cloudApi.deletePartnerOperator(partnerToken, op.id);
       if (res.success) {
         showNotification(res.data.message || `Akun kasir @${op.username} berhasil diproses.`);
         setOperatorToDelete(null);
@@ -1313,7 +1281,7 @@ export const PartnerPortal: React.FC = () => {
     setIsChangingPassword(true);
     setChangePasswordError(null);
     try {
-      const res = await photoboothApi.changePartnerPassword(currentPasswordInput, newPasswordInput, partnerToken);
+      const res = await cloudApi.changePartnerPassword(currentPasswordInput, newPasswordInput, partnerToken);
       if (res.success) {
         showNotification('Kata sandi berhasil diperbarui.');
         setShowChangePasswordModal(false);
@@ -1752,17 +1720,6 @@ export const PartnerPortal: React.FC = () => {
                 </button>
               )}
 
-              {/* Force Sync Cloud Button for Partner */}
-              <button
-                onClick={handlePartnerForceSync}
-                disabled={isSyncingPending}
-                className="p-2 sm:px-3 sm:py-2 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 hover:text-white transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-md shadow-indigo-500/10"
-                title="Sinkronkan data offline / transaksi pending ke database"
-              >
-                <UploadCloud className={`w-3.5 h-3.5 ${isSyncingPending ? 'animate-bounce text-indigo-400' : 'text-indigo-400'}`} />
-                <span>{isSyncingPending ? 'Menyinkronkan...' : 'Force Sync Cloud'}</span>
-              </button>
-
               {/* Global Refresh Button */}
               <button
                 onClick={() => {
@@ -1838,15 +1795,6 @@ export const PartnerPortal: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-1.5">
-              <button
-                onClick={handlePartnerForceSync}
-                disabled={isSyncingPending}
-                className="p-2 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 hover:text-white text-xs disabled:opacity-50"
-                title="Force Sync Cloud (Sinkronkan Data Pending)"
-              >
-                <UploadCloud className={`w-3.5 h-3.5 ${isSyncingPending ? 'animate-bounce text-indigo-400' : ''}`} />
-              </button>
-
               <button
                 onClick={() => {
                   if (activeTab === 'analytics') {

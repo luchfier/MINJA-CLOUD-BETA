@@ -71,7 +71,7 @@ export const PartnerCafeView: React.FC<PartnerCafeViewProps> = ({ t, whatsappUrl
                 <span className="block text-[11px] text-[#635F59] mt-0.5">{t.partner_stat_spots}</span>
               </div>
               <div className="p-3 rounded-2xl bg-[#F7F5F0]">
-                <span className="font-['JetBrains_Mono'] text-xl font-bold text-[#4648D4]">0 Rp</span>
+                <span className="font-['JetBrains_Mono'] text-xl font-bold text-[#4648D4]">Rp 0</span>
                 <span className="block text-[11px] text-[#635F59] mt-0.5">{t.partner_stat_cost}</span>
               </div>
               <div className="p-3 rounded-2xl bg-[#F7F5F0]">
@@ -86,6 +86,8 @@ export const PartnerCafeView: React.FC<PartnerCafeViewProps> = ({ t, whatsappUrl
               <img
                 src="/images/landing/partner-cafe.jpg"
                 alt="Suasana Kafe dengan Photobooth Minja"
+                loading="lazy"
+                decoding="async"
                 className="w-full aspect-[4/5] object-cover"
               />
               <div className="p-4 bg-white/95 backdrop-blur-sm border-t border-[#E5DFD5]">

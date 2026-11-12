@@ -1,13 +1,16 @@
 // src/services/delivery.service.ts
-// Service Orkestrasi Distribusi Digital (Galeri Berbatas Waktu & Email Delivery API)
-// Sesuai ARCHITECTURE.md §4.2, §6.3 & THE_NEXT_STEP.md §6
+// Service Orkestrasi Distribusi Digital (Galeri Berbatas Waktu 48 Jam & Email Delivery API)
 
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { createRequire } from 'node:module';
 import type { Archiver } from 'archiver';
+import type { PrismaClient } from '@prisma/client';
+import { StorageService, type SessionGalleryItem } from './storage.service.js';
+import { EmailService } from './email.service.js';
+import { AppError, ErrorCode } from '../types/common.types.js';
+import { getEnv } from '../config/env.js';
+import { formatSessionCode, formatSessionDigits } from '../utils/session.util.js';
+import { GalleryProgressEngine, GalleryProgressReport } from './galleryProgressEngine.service.js';
 
 const require = createRequire(import.meta.url);
 const rawArchiver = require('archiver');
@@ -33,13 +36,6 @@ function createZipArchive(options?: any): Archiver {
   }
   throw new Error('Tidak dapat menginisialisasi archiver engine.');
 }
-import type { PrismaClient } from '@prisma/client';
-import { StorageService, type SessionGalleryItem } from './storage.service.js';
-import { EmailService } from './email.service.js';
-import { AppError, ErrorCode } from '../types/common.types.js';
-import { getEnv } from '../config/env.js';
-import { formatSessionCode, formatSessionDigits } from '../utils/session.util.js';
-import { GalleryProgressEngine, GalleryProgressReport } from './galleryProgressEngine.service.js';
 
 export interface GalleryDetails {
   galleryId: string;
@@ -58,7 +54,7 @@ export class DeliveryService {
 
   constructor(
     private prisma: PrismaClient,
-    private storageService: StorageService = new StorageService(),
+    public storageService: StorageService = new StorageService(),
     private emailService: EmailService = new EmailService(),
     progressEngine?: GalleryProgressEngine
   ) {
@@ -66,25 +62,14 @@ export class DeliveryService {
   }
 
   /**
-   * Menentukan base URL galeri (bisa custom domain, cloudflare tunnel, atau auto-detect IP lokal)
+   * Menentukan base URL galeri Cloud resmi (default: https://gallery.minja.my.id)
    */
   public getBaseUrl(): string {
     const env = getEnv();
     if (env.GALLERY_BASE_URL && env.GALLERY_BASE_URL.trim().length > 0) {
       return env.GALLERY_BASE_URL.replace(/\/+$/, '');
     }
-
-    // Auto-detect IP lokal mesin Kiosk di jaringan Wi-Fi / LAN (misal: 192.168.10.138)
-    const nets = os.networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal && !net.address.startsWith('169.254')) {
-          return `http://${net.address}:${env.PORT || 3000}`;
-        }
-      }
-    }
-
-    return `http://localhost:${env.PORT || 3000}`;
+    return 'https://gallery.minja.my.id';
   }
 
   /**
@@ -93,12 +78,19 @@ export class DeliveryService {
   async getOrCreateGallery(sessionId: string): Promise<GalleryDetails> {
     const existing = await this.prisma.gallery.findUnique({
       where: { sessionId },
+      select: {
+        id: true,
+        sessionId: true,
+        token: true,
+        expiresAt: true,
+        accessCount: true,
+      },
     });
 
-    const settings = await this.prisma.settings.findFirst();
+    const settings = await this.prisma.settings.findFirst({
+      select: { boothName: true },
+    });
     const boothName = settings?.boothName || 'Minja Photobooth';
-
-    // Ekstrak 4 digit nomor sesi harian murni angka (0001 - 9999)
     const shortSessionNumber = formatSessionDigits(sessionId);
 
     if (existing) {
@@ -107,8 +99,9 @@ export class DeliveryService {
           sessionId,
           formatSessionCode(sessionId),
           existing.expiresAt.toISOString(),
-          boothName
-        ).catch((e) => console.warn('[DeliveryService] Cloud gallery backup publish failed:', e));
+          boothName,
+          existing.token
+        ).catch((e) => console.warn('[DeliveryService] Cloud gallery publish failed:', e));
       }
 
       const galleryUrl = `${this.getBaseUrl()}/s/${sessionId}?token=${existing.token}`;
@@ -129,9 +122,9 @@ export class DeliveryService {
       };
     }
 
-    // Pastikan session ada di database sebelum membuat Gallery (mencegah foreign key constraint error)
     const sessionExists = await this.prisma.session.findUnique({
       where: { id: sessionId },
+      select: { id: true },
     });
 
     if (!sessionExists) {
@@ -165,10 +158,9 @@ export class DeliveryService {
       });
     }
 
-    // Buat PIN 4 digit ramah mobile dan token kriptografis unik tanpa tabrakan
     const pin = Math.floor(1000 + Math.random() * 9000).toString();
     const token = `${pin}-${crypto.randomBytes(12).toString('hex')}`;
-    const expiresAt = new Date(Date.now() + 48 * 3600 * 1000); // 48 jam
+    const expiresAt = new Date(Date.now() + 48 * 3600 * 1000);
 
     const created = await this.prisma.gallery.create({
       data: {
@@ -185,7 +177,7 @@ export class DeliveryService {
         created.expiresAt.toISOString(),
         boothName,
         created.token
-      ).catch((e) => console.warn('[DeliveryService] Cloud gallery backup publish failed:', e));
+      ).catch((e) => console.warn('[DeliveryService] Cloud gallery publish failed:', e));
     }
 
     const galleryUrl = `${this.getBaseUrl()}/s/${sessionId}?token=${token}`;
@@ -212,8 +204,9 @@ export class DeliveryService {
   ): Promise<{ sent: boolean; messageId: string }> {
     const gallery = await this.getOrCreateGallery(sessionId);
 
-    // Ambil nama booth dari settings jika ada
-    const settings = await this.prisma.settings.findFirst();
+    const settings = await this.prisma.settings.findFirst({
+      select: { boothName: true },
+    });
     const boothName = settings?.boothName || 'Minja Photobooth';
 
     const sessionCode = formatSessionCode(sessionId);
@@ -224,7 +217,6 @@ export class DeliveryService {
       sessionCode
     );
 
-    // Catat DeliveryJob ke database untuk audit pengiriman
     try {
       await this.prisma.deliveryJob.create({
         data: {
@@ -248,66 +240,6 @@ export class DeliveryService {
   }
 
   /**
-   * Mengunggah file foto atau video ke penyimpanan galeri
-   */
-  async uploadGalleryFile(
-    sessionId: string,
-    fileType: 'layout_4r' | 'live_video' | 'raw_photo',
-    dataUrl: string,
-    customName?: string
-  ): Promise<{ url: string; sizeBytes: number }> {
-    let ext = fileType === 'live_video' ? 'mp4' : 'jpg';
-    let mimeType = fileType === 'live_video' ? 'video/mp4' : 'image/jpeg';
-
-    if (dataUrl.startsWith('data:')) {
-      const mimeMatch = dataUrl.match(/^data:([^;,]+)/);
-      if (mimeMatch && mimeMatch[1]) {
-        mimeType = mimeMatch[1].toLowerCase();
-        if (mimeType.includes('webm')) ext = 'webm';
-        else if (mimeType.includes('mp4')) ext = 'mp4';
-        else if (mimeType.includes('png')) ext = 'png';
-        else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg';
-      }
-    }
-
-    let fileName = customName;
-    if (!fileName) {
-      fileName = `${fileType}_${Date.now()}.${ext}`;
-    }
-
-    const result = await this.storageService.uploadFile(
-      sessionId,
-      fileName,
-      dataUrl,
-      mimeType
-    );
-
-    // Otomatis refresh publikasi galeri Cloudflare R2 di background agar file baru langsung muncul di HTML galeri
-    if (this.storageService.isCloudStorageActive()) {
-      (async () => {
-        try {
-          const gallery = await this.prisma.gallery.findUnique({ where: { sessionId } });
-          const settings = await this.prisma.settings.findFirst();
-          const boothName = settings?.boothName || 'Minja Photobooth';
-          await this.storageService.publishCloudGallery(
-            sessionId,
-            formatSessionCode(sessionId),
-            gallery?.expiresAt?.toISOString() || new Date(Date.now() + 48 * 3600 * 1000).toISOString(),
-            boothName
-          );
-        } catch (err) {
-          console.warn('[DeliveryService] Gagal merefresh Cloud Gallery setelah upload:', err);
-        }
-      })();
-    }
-
-    return {
-      url: result.publicUrl,
-      sizeBytes: result.sizeBytes,
-    };
-  }
-
-  /**
    * Akses publik untuk smartphone pelanggan mengunduh foto dari galeri
    */
   async getPublicGallery(
@@ -322,8 +254,12 @@ export class DeliveryService {
   }> {
     const gallery = await this.prisma.gallery.findUnique({
       where: { sessionId },
-      include: {
-        session: true,
+      select: {
+        id: true,
+        sessionId: true,
+        token: true,
+        expiresAt: true,
+        accessCount: true,
       },
     });
 
@@ -344,16 +280,16 @@ export class DeliveryService {
       );
     }
 
-    // Update access count
     await this.prisma.gallery.update({
       where: { id: gallery.id },
       data: { accessCount: { increment: 1 } },
+      select: { id: true },
     });
 
     const files = await this.storageService.listSessionFiles(sessionId);
 
     return {
-      sessionCode: formatSessionDigits(gallery.session.id),
+      sessionCode: formatSessionDigits(gallery.sessionId),
       expiresAt: gallery.expiresAt.toISOString(),
       isExpired: false,
       files,
@@ -403,12 +339,17 @@ export class DeliveryService {
       );
     }
 
-    // Cari galeri berdasarkan sessionId penuh atau 4 digit suffix, atau pencarian langsung via token PIN
     const galleries = await this.prisma.gallery.findMany({
       where: {
         OR: orConditions,
       },
-      include: { session: true },
+      select: {
+        id: true,
+        sessionId: true,
+        token: true,
+        expiresAt: true,
+        createdAt: true,
+      },
       orderBy: { createdAt: 'desc' },
       take: 10,
     });
@@ -422,8 +363,7 @@ export class DeliveryService {
       throw new AppError(404, ErrorCode.GALLERY_TOKEN_INVALID, 'Nomor sesi atau PIN tidak ditemukan.');
     }
 
-    const settings = await this.prisma.settings.findFirst();
-    const studioAddress = settings?.studioAddress || 'Lokasi Booth Minja Studio';
+    const studioAddress = 'Lokasi Booth Minja Studio';
     const createdAtIso = matchedGallery.createdAt.toISOString();
 
     if (new Date() > matchedGallery.expiresAt) {
@@ -460,7 +400,6 @@ export class DeliveryService {
       };
     }
 
-    // Update access count
     await this.prisma.gallery.update({
       where: { id: matchedGallery.id },
       data: { accessCount: { increment: 1 } },
@@ -497,7 +436,13 @@ export class DeliveryService {
   }> {
     const gallery = await this.prisma.gallery.findUnique({
       where: { sessionId },
-      include: { session: true },
+      select: {
+        id: true,
+        sessionId: true,
+        token: true,
+        expiresAt: true,
+        createdAt: true,
+      },
     });
 
     if (!gallery) {
@@ -511,8 +456,7 @@ export class DeliveryService {
       throw new AppError(403, ErrorCode.GALLERY_TOKEN_INVALID, 'Token verifikasi galeri tidak cocok.');
     }
 
-    const settings = await this.prisma.settings.findFirst();
-    const studioAddress = settings?.studioAddress || 'Lokasi Booth Minja Studio';
+    const studioAddress = 'Lokasi Booth Minja Studio';
     const createdAtIso = gallery.createdAt.toISOString();
 
     if (new Date() > gallery.expiresAt) {
@@ -562,69 +506,7 @@ export class DeliveryService {
   }
 
   /**
-   * Mengambil data galeri terstruktur untuk rendering template halaman web mobile
-   */
-  async getGalleryHtmlData(
-    sessionId: string,
-    token: string
-  ): Promise<{
-    boothName: string;
-    sessionId: string;
-    sessionCode: string;
-    expiresAt: string;
-    items: SessionGalleryItem[];
-    token: string;
-  }> {
-    const gallery = await this.prisma.gallery.findUnique({
-      where: { sessionId },
-      include: {
-        session: true,
-      },
-    });
-
-    const gPin = gallery?.token?.includes('-') ? gallery.token.split('-')[0] : gallery?.token?.slice(0, 4);
-    const isTokenMatch = gallery && (gallery.token === token || gPin === token || gallery.token.startsWith(token));
-
-    if (!gallery || !isTokenMatch) {
-      throw new AppError(
-        404,
-        ErrorCode.GALLERY_TOKEN_INVALID,
-        'Tautan galeri tidak valid atau token verifikasi salah.'
-      );
-    }
-
-    if (new Date() > gallery.expiresAt) {
-      throw new AppError(
-        410,
-        ErrorCode.GALLERY_EXPIRED,
-        'Masa aktif galeri foto telah berakhir (maksimal 48 jam).'
-      );
-    }
-
-    // Update access count
-    await this.prisma.gallery.update({
-      where: { id: gallery.id },
-      data: { accessCount: { increment: 1 } },
-    });
-
-    const settings = await this.prisma.settings.findFirst();
-    const boothName = settings?.boothName || 'Minja Photobooth';
-
-    const items = await this.storageService.listSessionGalleryItems(sessionId);
-
-    return {
-      boothName,
-      sessionId,
-      sessionCode: formatSessionCode(gallery.session.id),
-      expiresAt: gallery.expiresAt.toISOString(),
-      items,
-      token,
-    };
-  }
-
-  /**
-   * Mengemas dan melakukan streaming file ZIP galeri (foto cetak, foto mentah, video)
-   * Menggunakan library archiver dengan streaming langsung ke klien (RAM-friendly)
+   * Mengemas dan melakukan streaming file ZIP galeri langsung dari Cloudflare R2 (RAM-friendly)
    */
   async streamGalleryZip(
     sessionId: string,
@@ -636,8 +518,11 @@ export class DeliveryService {
   }> {
     const gallery = await this.prisma.gallery.findUnique({
       where: { sessionId },
-      include: {
-        session: true,
+      select: {
+        id: true,
+        sessionId: true,
+        token: true,
+        expiresAt: true,
       },
     });
 
@@ -660,33 +545,28 @@ export class DeliveryService {
       );
     }
 
-    // Catat kenaikan access count
     await this.prisma.gallery.update({
       where: { id: gallery.id },
       data: { accessCount: { increment: 1 } },
+      select: { id: true },
     });
 
-    const safeSessionId = path.basename(sessionId);
-    const sessionDir = path.join(this.storageService.getBaseDir(), safeSessionId);
-
-    type MediaEntry = { name: string; localPath?: string; buffer?: Buffer };
+    type MediaEntry = {
+      name: string;
+      stream?: import('node:stream').Readable;
+      buffer?: Buffer;
+    };
     const mediaEntries: MediaEntry[] = [];
 
-    if (fs.existsSync(sessionDir)) {
-      // 1. Prioritaskan pembacaan berkas fisik dari penyimpanan lokal booth
-      const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.webm', '.gif']);
-      const allEntries = await fs.promises.readdir(sessionDir, { withFileTypes: true });
-      const files = allEntries
-        .filter((e) => e.isFile() && allowedExts.has(path.extname(e.name).toLowerCase()))
-        .map((e) => ({
-          name: e.name,
-          localPath: path.join(sessionDir, e.name),
-        }));
-      mediaEntries.push(...files);
-    } else {
-      // 2. Fallback: Jika berjalan di VPS Cloud tanpa folder lokal booth, ambil buffer langsung dari R2/S3
-      const cloudItems = await this.storageService.listSessionGalleryItems(sessionId);
-      for (const item of cloudItems) {
+    const cloudItems = await this.storageService.listSessionGalleryItems(sessionId);
+    for (const item of cloudItems) {
+      const stream = await this.storageService.getObjectStream(item.key);
+      if (stream) {
+        mediaEntries.push({
+          name: item.fileName,
+          stream,
+        });
+      } else {
         const buf = await this.storageService.getObjectBuffer(item.key);
         if (buf && buf.length > 0) {
           mediaEntries.push({
@@ -705,23 +585,21 @@ export class DeliveryService {
       );
     }
 
-    const sessionCode = formatSessionCode(gallery.session.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sessionCode = formatSessionCode(gallery.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
     const zipFileName = `Minja_Foto_${sessionCode}.zip`;
 
     const archive = createZipArchive({
-      zlib: { level: 5 }, // Kompresi efisien & cepat untuk media
+      zlib: { level: 5 },
     });
 
-    // Tambahkan tiap file fisik atau buffer ke dalam zip
     for (const entry of mediaEntries) {
-      if (entry.localPath) {
-        archive.file(entry.localPath, { name: entry.name });
+      if (entry.stream) {
+        archive.append(entry.stream, { name: entry.name });
       } else if (entry.buffer) {
         archive.append(entry.buffer, { name: entry.name });
       }
     }
 
-    // Mulai proses finalisasi kompresi
     archive.finalize();
 
     return {

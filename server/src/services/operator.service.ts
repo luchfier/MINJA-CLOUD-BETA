@@ -7,9 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AppError, ErrorCode } from '../types/common.types.js';
-import { verifyPin, signCustomToken } from '../utils/auth.util.js';
+import { verifyPin, signCustomToken, calculateGraduatedLockout } from '../utils/auth.util.js';
 import { AccessCodeService } from './accessCode.service.js';
 import { KioskService } from './kiosk.service.js';
+import { calculateWibDateRange } from './partner.service.js';
 import { humanLogger } from '../utils/humanLogger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -63,15 +64,59 @@ export class OperatorService {
       throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Username atau PIN kasir salah / akun dinonaktifkan.');
     }
 
-    const isValid = await verifyPin(pin.trim(), operator.pinHash);
-    if (!isValid) {
-      throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Username atau PIN kasir salah.');
+    const now = new Date();
+
+    // 1. Cek status lockout bertahap kasir
+    if (operator.lockedUntil && operator.lockedUntil > now) {
+      const remainingMinutes = Math.ceil((operator.lockedUntil.getTime() - now.getTime()) / (60 * 1000));
+      throw new AppError(
+        423,
+        ErrorCode.ADMIN_LOCKED_OUT,
+        `Akun kasir terkunci sementara demi keamanan karena salah PIN berturut-turut. Coba lagi dalam ${remainingMinutes} menit.`,
+        { lockedUntil: operator.lockedUntil.toISOString(), remainingMinutes }
+      );
     }
 
-    // Update lastLoginAt
+    // 2. Verifikasi PIN kasir
+    const isValid = await verifyPin(pin.trim(), operator.pinHash);
+    if (!isValid) {
+      const newAttempts = (operator.failedAttempts || 0) + 1;
+      const lockoutTier = calculateGraduatedLockout(newAttempts);
+      const lockedUntil = lockoutTier ? lockoutTier.lockedUntil : null;
+
+      await this.prisma.operator.update({
+        where: { id: operator.id },
+        data: {
+          failedAttempts: newAttempts,
+          lockedUntil,
+        },
+      });
+
+      if (lockoutTier && lockedUntil) {
+        throw new AppError(
+          423,
+          ErrorCode.ADMIN_LOCKED_OUT,
+          `PIN kasir salah ${newAttempts} kali berturut-turut. Akun dikunci sementara selama ${lockoutTier.minutes} menit demi keamanan.`,
+          { lockedUntil: lockedUntil.toISOString(), remainingMinutes: lockoutTier.minutes }
+        );
+      }
+
+      const remainingAttempts = Math.max(1, 3 - newAttempts);
+      throw new AppError(
+        401,
+        ErrorCode.UNAUTHORIZED,
+        `Username atau PIN kasir salah. Percobaan tersisa sebelum akun dikunci: ${remainingAttempts} kali.`
+      );
+    }
+
+    // Reset status lockout jika login kasir berhasil
     await this.prisma.operator.update({
       where: { id: operator.id },
-      data: { lastLoginAt: new Date() },
+      data: {
+        failedAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+      },
     });
 
     const { token, expiresAt } = signCustomToken({
@@ -227,8 +272,7 @@ export class OperatorService {
       throw new AppError(404, ErrorCode.NOT_FOUND, 'Operator tidak ditemukan.');
     }
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const { rangeStart: todayStart } = calculateWibDateRange('today');
 
     const passesToday = await this.prisma.accessCode.findMany({
       where: {
@@ -485,7 +529,10 @@ export class OperatorService {
     }
 
     let session = targetKioskId
-      ? await this.prisma.session.findFirst({ where: { id: sessionId, kioskId: targetKioskId } })
+      ? await this.prisma.session.findFirst({
+          where: { id: sessionId, kioskId: targetKioskId },
+          include: { photos: { select: { storageUrl: true }, take: 1 } },
+        })
       : null;
 
     if (!session && operator.partnerId) {
@@ -494,6 +541,7 @@ export class OperatorService {
           id: sessionId,
           kiosk: { partnerId: operator.partnerId },
         },
+        include: { photos: { select: { storageUrl: true }, take: 1 } },
       });
     }
 

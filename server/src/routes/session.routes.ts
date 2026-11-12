@@ -1,12 +1,10 @@
 // src/routes/session.routes.ts
-// Route handler untuk Sesi Pelanggan (Sessions)
-// Sesuai API_CONTRACT.md §3.5
+// Route handler untuk Sinkronisasi Sesi Pelanggan dari Booth Kiosk ke Cloud VPS
 
 import type { FastifyInstance } from 'fastify';
 import { SessionService } from '../services/session.service.js';
 import {
   createSessionSchema,
-  updateSessionStateSchema,
   completeSessionSchema,
   cancelSessionSchema,
 } from '../schemas/session.schema.js';
@@ -18,7 +16,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /api/sessions
-   * Membuat sesi baru untuk pelanggan
+   * Membuat sesi baru dari Booth Kiosk
    */
   app.post(
     '/api/sessions',
@@ -31,50 +29,8 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * GET /api/sessions/active
-   * Mengambil sesi aktif saat ini di booth
-   */
-  app.get(
-    '/api/sessions/active',
-    { preHandler: [requireBoothAuth] },
-    async (_request, reply) => {
-      const active = await sessionService.getActiveSession();
-      sendSuccess(reply, active);
-    }
-  );
-
-  /**
-   * GET /api/sessions/:id
-   * Mengambil detail sesi berdasarkan ID
-   */
-  app.get(
-    '/api/sessions/:id',
-    { preHandler: [requireBoothAuth] },
-    async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const session = await sessionService.getSession(id);
-      sendSuccess(reply, session);
-    }
-  );
-
-  /**
-   * PATCH /api/sessions/:id/state
-   * Update state lifecycle sesi foto
-   */
-  app.patch(
-    '/api/sessions/:id/state',
-    { preHandler: [requireBoothAuth] },
-    async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const body = updateSessionStateSchema.parse(request.body);
-      const updated = await sessionService.updateSessionState(id, body);
-      sendSuccess(reply, updated);
-    }
-  );
-
-  /**
    * POST /api/sessions/:id/complete
-   * Menyelesaikan sesi foto
+   * Menyelesaikan sesi foto & mencatat jumlah cetak dari Booth Kiosk
    */
   app.post(
     '/api/sessions/:id/complete',
@@ -82,14 +38,14 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const body = completeSessionSchema.parse(request.body);
-      const completed = await sessionService.completeSession(id, body);
+      const completed = await sessionService.completeSession(id, body, request.kioskId);
       sendSuccess(reply, completed);
     }
   );
 
   /**
    * POST /api/sessions/:id/cancel
-   * Membatalkan sesi foto
+   * Membatalkan sesi foto dari Booth Kiosk
    */
   app.post(
     '/api/sessions/:id/cancel',

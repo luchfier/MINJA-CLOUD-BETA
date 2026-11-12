@@ -36,6 +36,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                     <img
                       src="/images/landing/layout-strip-1.jpg"
                       alt="Dua sahabat tertawa lepas di photobooth"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -43,6 +45,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                     <img
                       src="/images/landing/layout-strip-2.jpg"
                       alt="Tiga sahabat ceria berangkulan"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -50,6 +54,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                     <img
                       src="/images/landing/layout-strip-3.jpg"
                       alt="Empat sahabat pose heboh seru"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -59,6 +65,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                     <img
                       src="/images/landing/layout-strip-1.jpg"
                       alt="Dua sahabat tertawa lepas monokrom"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover grayscale"
                     />
                   </div>
@@ -66,6 +74,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                     <img
                       src="/images/landing/layout-strip-4.jpg"
                       alt="Tiga pemuda tertawa pegang clicker"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -73,6 +83,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                     <img
                       src="/images/landing/layout-strip-5.jpg"
                       alt="Pose kompak sahabat"
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -97,6 +109,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                   <img
                     src="/images/landing/layout-4r-single.jpg"
                     alt="Pasangan Pengantin Wedding Minja"
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -124,6 +138,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                   <img
                     src="/images/landing/layout-grid-1.jpg"
                     alt="Empat sahabat berpelukan"
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -131,6 +147,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                   <img
                     src="/images/landing/layout-grid-2.jpg"
                     alt="Tiga sahabat kacamata unik"
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -138,6 +156,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                   <img
                     src="/images/landing/layout-grid-3.jpg"
                     alt="Dua sahabat pose lucu"
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -145,6 +165,8 @@ export const FrameLayoutsSection: React.FC<FrameLayoutsSectionProps> = ({ t }) =
                   <img
                     src="/images/landing/layout-grid-4.jpg"
                     alt="Empat sahabat tertawa ceria"
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                 </div>

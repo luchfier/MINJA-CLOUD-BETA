@@ -37,6 +37,26 @@ export async function verifyPin(pin: string, hash: string): Promise<boolean> {
   }
 }
 
+/**
+ * Menghitung status lockout bertahap sesuai standar keamanan bertingkat:
+ * - 3x salah: Kunci 1 Menit (Tier 1)
+ * - 5x salah: Kunci 5 Menit (Tier 2)
+ * - 6x salah ke atas: Kunci 60 Menit (Tier 3)
+ */
+export function calculateGraduatedLockout(attempts: number): { minutes: number; lockedUntil: Date } | null {
+  const now = Date.now();
+  if (attempts >= 6) {
+    return { minutes: 60, lockedUntil: new Date(now + 60 * 60 * 1000) };
+  }
+  if (attempts >= 5) {
+    return { minutes: 5, lockedUntil: new Date(now + 5 * 60 * 1000) };
+  }
+  if (attempts >= 3) {
+    return { minutes: 1, lockedUntil: new Date(now + 1 * 60 * 1000) };
+  }
+  return null;
+}
+
 export type UserRole = 'admin' | 'owner' | 'partner' | 'operator';
 
 export interface AdminJwtPayload {

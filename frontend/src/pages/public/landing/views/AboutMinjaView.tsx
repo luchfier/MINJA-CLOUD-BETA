@@ -76,6 +76,8 @@ export const AboutMinjaView: React.FC<AboutMinjaViewProps> = ({ t, whatsappUrl, 
               <img
                 src="/images/landing/showcase-candid-1.jpg"
                 alt="Suasana Bilik Minja"
+                loading="lazy"
+                decoding="async"
                 className="w-full aspect-[4/5] object-cover"
               />
               <div className="p-3 bg-white flex items-center justify-between text-[10px] font-['JetBrains_Mono'] text-[#635F59]">

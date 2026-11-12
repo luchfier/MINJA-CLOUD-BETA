@@ -6,9 +6,6 @@ export const defaultBranding: PublicBrandingConfig = {
   tagline: 'Momen Istimewa, Abadi Bersama',
   logoUrl: '',
   wallpaperUrl: '',
-  welcomeHeadline: 'Sentuh Layar Untuk Mengabadikan Momenmu',
-  welcomeSubheadline: 'Photobooth Mandiri Kualitas Studio Cetak Foto Instan',
-  startSessionButtonText: 'Mulai Sesi Foto',
   primaryColor: '#F59E0B',      // Amber/Gold
   accentColor: '#38BDF8',       // Sky Blue
   darkSurfaceColor: '#0E131F',  // Deep Slate
@@ -19,12 +16,12 @@ export const defaultBranding: PublicBrandingConfig = {
   logoHeight: 64,
   glassmorphismIntensity: 'medium',
   enableVignette: true,
-  whatsappNumber: '6281234567890',
-  instagramHandle: '@minjastudio',
+  whatsappNumber: '6281321699090',
+  instagramHandle: '@minjabooth',
   studioAddress: 'Lokasi Booth Minja Studio',
   promoHeadline: 'Abadikan Momen Terbaik dengan Kualitas Studio Lab',
-  promoSubheadline: 'Nikmati pengalaman berfoto mandiri tanpa canggung. Cetak foto fisik standar studio 10×15 cm tahan air dalam hitungan detik, pilihan frame strip eksklusif, plus unduhan digital langsung ke smartphone Anda.',
-  livePhotoEnabled: true,
+  promoSubheadline:
+    'Nikmati pengalaman berfoto mandiri tanpa canggung. Cetak foto fisik standar studio 10×15 cm tahan air dalam hitungan detik, pilihan frame strip eksklusif, plus unduhan digital langsung ke smartphone Anda.',
 };
 
 interface ThemeContextValue {
@@ -37,11 +34,7 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [branding, setBranding] = useState<PublicBrandingConfig>(() => {
-    try {
-      const savedAdmin = localStorage.getItem('minja_kiosk_admin_settings');
-      if (savedAdmin) {
-        return { ...defaultBranding, ...JSON.parse(savedAdmin) };
-      }
+  try {
       const saved = localStorage.getItem('minja_public_branding');
       return saved ? { ...defaultBranding, ...JSON.parse(saved) } : defaultBranding;
     } catch {
@@ -50,15 +43,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
 
   useEffect(() => {
-    // Dynamically inject CSS variables into document root
     const root = document.documentElement;
     root.style.setProperty('--color-primary', branding.primaryColor);
     root.style.setProperty('--color-accent', branding.accentColor);
     root.style.setProperty('--bg-surface', branding.darkSurfaceColor);
     root.style.setProperty('--bg-blur', `${branding.backgroundBlur ?? 8}px`);
     root.style.setProperty('--bg-overlay-opacity', `${(branding.backgroundOverlayOpacity ?? 50) / 100}`);
-    
-    // Save to localStorage
+
     try {
       localStorage.setItem('minja_public_branding', JSON.stringify(branding));
     } catch (e) {
@@ -67,23 +58,12 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [branding]);
 
   const updateBranding = (newBranding: Partial<PublicBrandingConfig>) => {
-    setBranding((prev) => {
-      const updated = { ...prev, ...newBranding };
-      try {
-        const savedAdmin = localStorage.getItem('minja_kiosk_admin_settings');
-        const existingAdmin = savedAdmin ? JSON.parse(savedAdmin) : {};
-        localStorage.setItem('minja_kiosk_admin_settings', JSON.stringify({ ...existingAdmin, ...updated }));
-      } catch (e) {
-        console.warn('Gagal sync admin settings ke localStorage:', e);
-      }
-      return updated;
-    });
+    setBranding((prev) => ({ ...prev, ...newBranding }));
   };
 
   const resetBranding = () => {
     try {
       localStorage.removeItem('minja_public_branding');
-      localStorage.removeItem('minja_kiosk_admin_settings');
     } catch {}
     setBranding(defaultBranding);
   };

@@ -4,7 +4,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { AdminAuthService } from '../services/admin-auth.service.js';
-import { adminLoginSchema, adminChangePinSchema } from '../schemas/admin.schema.js';
+import { adminLoginSchema, adminChangePasswordSchema } from '../schemas/admin.schema.js';
 import { requireAdminAuth } from '../middleware/auth.middleware.js';
 import { sendSuccess } from '../middleware/error.middleware.js';
 import { logAuditEvent } from '../services/audit.service.js';
@@ -14,14 +14,21 @@ export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /api/admin/login
-   * Verifikasi PIN dan terbitkan JWT
+   * Verifikasi Username & Password Super Admin, terbitkan JWT
    */
   app.post('/api/admin/login', async (request, reply) => {
     const body = adminLoginSchema.parse(request.body);
     const ip = request.ip;
     const userAgent = request.headers['user-agent'];
 
-    const result = await authService.login(body.pin, ip, userAgent);
+    const result = await authService.login(
+      {
+        username: body.username,
+        password: body.password || body.pin,
+      },
+      ip,
+      userAgent
+    );
     sendSuccess(reply, result);
   });
 
@@ -60,23 +67,24 @@ export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * PUT /api/admin/pin
-   * Mengganti PIN admin
+   * Handler Ubah Password Super Admin
    */
-  app.put(
-    '/api/admin/pin',
-    { preHandler: [requireAdminAuth] },
-    async (request, reply) => {
-      const body = adminChangePinSchema.parse(request.body);
-      const adminId = request.admin!.sub;
+  const handleChangePassword = async (request: any, reply: any) => {
+    const body = adminChangePasswordSchema.parse(request.body);
+    const adminId = request.admin!.sub;
+    const currentPass = body.currentPassword || body.currentPin || '';
+    const newPass = body.newPassword || body.newPin || '';
 
-      const result = await authService.changePin(
-        adminId,
-        body.currentPin,
-        body.newPin,
-        request.ip
-      );
-      sendSuccess(reply, result);
-    }
-  );
+    const result = await authService.changePassword(
+      adminId,
+      currentPass,
+      newPass,
+      request.ip
+    );
+    sendSuccess(reply, result);
+  };
+
+  app.put('/api/admin/password', { preHandler: [requireAdminAuth] }, handleChangePassword);
+  app.put('/api/admin/pin', { preHandler: [requireAdminAuth] }, handleChangePassword);
+  app.post('/api/admin/change-pin', { preHandler: [requireAdminAuth] }, handleChangePassword);
 }
